@@ -1,0 +1,81 @@
+# ==========================================================================
+# lilr-wgs — default configuration
+#
+# Relative paths resolve against the repository root, so the workflow runs from
+# anywhere. Normally only `manifest` and `reference` need editing.
+# ==========================================================================
+
+# ---- Inputs ----
+# TSV: sample_id, cram, crai, population. Build one with:
+#   python3 scripts/make_manifest.py --collection 2504 -o config/manifest.tsv
+# `cram` may be a local path or an https:// URL; nothing is staged either way.
+manifest: config/manifest.tsv
+
+# The FASTA the CRAMs were compressed against. For 1000 Genomes this is
+# GRCh38_full_analysis_set_plus_decoy_hla.fa — fetch it with
+# scripts/fetch_reference.sh. A *different* GRCh38 decodes most bases correctly
+# and corrupts the rest, which is considerably worse than failing.
+reference: resources/reference/GRCh38_full_analysis_set_plus_decoy_hla.fa
+
+genes_file: config/genes.txt
+
+# ---- Shipped reference data ----
+gdna_panels: resources/gdna              # HPRC pangenome panels, for recruitment
+locus_refs: resources/bundle/references  # single per-locus refs, for calling
+exon_coords: resources/bundle/exon_coords
+panel_index: resources/gdna_index        # built by scripts/build_indices.sh
+locus_index: resources/locus_index
+
+outdir: results
+
+# ---- Read assignment ----
+# A gene within this much of the best paired AS score counts as tied.
+score_buffer: 2
+# Gene pairs short reads cannot separate. A tie confined to one group is kept in
+# every tied member rather than dropped from all of them, because in these blocks
+# the tie is a property of the genes and a competitive discard deletes the block
+# from both at once. PING does the same for KIR2DL5A/B.
+shared_groups:
+  - [LILRA6, LILRB3]   # ~4.6 kb Ig-domain block with no gene-diagnostic 31-mers
+  - [LILRB1, LILRB4]   # LILRB1 cytoplasmic tail is ~92% identical to LILRB4
+
+# ---- Depth model ----
+depth:
+  # Tail mass excluded on each side of the expected depth distribution. This
+  # replaces the predecessor's fixed DP>=20, which at 30x sits in the middle of
+  # the distribution and masks about half of every gene.
+  alpha: 0.005
+  # Below this many reads per haploid copy a haplotype cannot be distinguished
+  # whatever the total depth says.
+  min_reads_per_copy: 5
+  # Fraction of reads above the MAPQ floor below which a position is reported as
+  # low_mapq rather than as a depth problem.
+  min_mapq_fraction: 0.5
+  # Correct lambda_1 for local GC. The LILR genes are not at the genomic mean GC,
+  # so leaving this off biases every threshold in a gene-dependent direction.
+  gc_correction: true
+
+# ---- Copy number ----
+cn:
+  # Genes called from data. Everything else is fixed at 2 — including LILRB3 in
+  # the predecessor, which is deliberate there; here LILRB3 is called, because
+  # its unique window is measurable and it is the internal control for LILRA6.
+  called_genes: [LILRA3, LILRA6, LILRB3]
+  # PING-style manual overrides: sample_id, gene, copies, reason. An auto-called
+  # boundary in a paralogous cluster should be overridable as an artefact rather
+  # than a code edit.
+  overrides: config/cn_overrides.tsv
+
+# ---- Retention ----
+# Keep the per-sample CRAM slice. Useful for debugging and re-running the depth
+# work without touching the network; ~30 MB per sample, so ~75 GB at 2,504.
+keep_slices: false
+
+# ---- Tools ----
+# Everything is expected on $PATH; create the shipped environment with
+#   micromamba create -y -f environment.yml
+# `prelude` runs at the top of every rule, for module-based HPC sites.
+prelude: ""
+threads:
+  process_sample: 4
+  genotype: 2

@@ -275,15 +275,57 @@ def depth_regions() -> list[str]:
     return regions
 
 
-def slice_regions(include_alts: bool = True) -> list[str]:
-    """One remote pass per sample: everything any stage will need.
+def merge_intervals(intervals: list[tuple[str, int, int]],
+                    ) -> list[tuple[str, int, int]]:
+    """Collapse overlapping and touching intervals, per contig.
+
+    This is not tidiness. ``samtools view`` given several regions emits a read
+    once *per region it overlaps*, so an interval contained in another one
+    silently doubles the depth everywhere they coincide — and three of the
+    control loci sit inside the LRC slice. That inflates λ₁ by a factor of two
+    and halves every copy number derived from it, which looks like a cohort of
+    hemizygotes rather than like a bug.
+
+    The ``-M`` flag makes samtools emit each read once regardless; merging here
+    as well means the two guards are independent, and the region list is also
+    honest about how much sequence is being fetched.
+    """
+    by_chrom: dict[str, list[tuple[int, int]]] = {}
+    for chrom, start, end in intervals:
+        by_chrom.setdefault(chrom, []).append((start, end))
+
+    merged: list[tuple[str, int, int]] = []
+    for chrom in sorted(by_chrom):
+        spans = sorted(by_chrom[chrom])
+        current_start, current_end = spans[0]
+        for start, end in spans[1:]:
+            if start <= current_end:
+                current_end = max(current_end, end)
+            else:
+                merged.append((chrom, current_start, current_end))
+                current_start, current_end = start, end
+        merged.append((chrom, current_start, current_end))
+    return merged
+
+
+def slice_intervals(include_alts: bool = True) -> list[tuple[str, int, int]]:
+    """One remote pass per sample: everything any stage will need, merged.
 
     Extraction and the coverage model need different intervals, and a CRAM read
     over HTTPS is the expensive part of a sample. Fetching the union once and
     working locally afterwards costs a little disk and saves a second traversal,
     which matters at 2,504 samples.
     """
-    seen: dict[str, None] = {}
-    for region in extraction_regions(include_alts) + depth_regions():
-        seen[region] = None
-    return list(seen)
+    intervals = [LRC_SLICE]
+    if include_alts:
+        intervals.extend(alt_regions())
+    intervals.extend((c.chrom, c.start - FLANK, c.end + FLANK)
+                     for c in ALL_CONTROLS)
+    chrom, pos = LILRA3_JUNCTION
+    intervals.append((chrom, pos - 2_000, pos + 2_000))
+    return merge_intervals([(c, max(0, s), e) for c, s, e in intervals])
+
+
+def slice_regions(include_alts: bool = True) -> list[str]:
+    """:func:`slice_intervals` as samtools region strings."""
+    return [as_region(*iv) for iv in slice_intervals(include_alts)]

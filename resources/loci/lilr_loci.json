@@ -1,0 +1,251 @@
+{
+  "assembly": "GRCh38/hg38",
+  "read_length": 100,
+  "max_mismatch": 3,
+  "source": "UCSC REST getData/sequence",
+  "LILRA3": {
+    "chr19_GL949746v1_alt": {
+      "junction_primary": 54296977,
+      "junction_ambiguity_bp": 6,
+      "junction_identity": 0.981,
+      "flank_identity": 0.632,
+      "deletion_bp": 6758,
+      "alt_start": 271714,
+      "alt_end": 278472
+    },
+    "chr19_GL949747v2_alt": {
+      "junction_primary": 54296977,
+      "junction_ambiguity_bp": 6,
+      "junction_identity": 0.975,
+      "flank_identity": 0.627,
+      "deletion_bp": 6759,
+      "alt_start": 271595,
+      "alt_end": 278354
+    },
+    "chr19_GL949753v2_alt": {
+      "junction_primary": 54296977,
+      "junction_ambiguity_bp": 6,
+      "junction_identity": 0.976,
+      "flank_identity": 0.628,
+      "deletion_bp": 6758,
+      "alt_start": 271970,
+      "alt_end": 278728
+    },
+    "chr19_KI270938v1_alt": {
+      "junction_primary": 54296977,
+      "junction_ambiguity_bp": 6,
+      "junction_identity": 0.978,
+      "flank_identity": 0.664,
+      "deletion_bp": 6758,
+      "alt_start": 271943,
+      "alt_end": 278701
+    }
+  },
+  "LILRA3_junction_primary": {
+    "chrom": "chr19",
+    "pos": 54296977,
+    "spread_bp": 0
+  },
+  "LILRB3": {
+    "chrom": "chr19",
+    "gene_start": 54216277,
+    "gene_end": 54223007,
+    "unique_windows": [
+      [
+        54216459,
+        54217051
+      ],
+      [
+        54218251,
+        54219540
+      ]
+    ],
+    "unique_bp": 1881,
+    "gene_ambiguous_fraction": 0.535
+  },
+  "LILRA6": {
+    "chrom": "chr19",
+    "gene_start": 54236589,
+    "gene_end": 54242790,
+    "unique_windows": [
+      [
+        54236589,
+        54238675
+      ],
+      [
+        54239049,
+        54239863
+      ]
+    ],
+    "unique_bp": 2900,
+    "gene_ambiguous_fraction": 0.394
+  },
+  "controls": {
+    "PRPF31": {
+      "chrom": "chr19",
+      "start": 54115410,
+      "end": 54131719,
+      "span": 16309,
+      "ambiguous_fraction": 0.017
+    },
+    "TMC4": {
+      "chrom": "chr19",
+      "start": 54160095,
+      "end": 54173250,
+      "span": 13155,
+      "ambiguous_fraction": 0.0
+    },
+    "MBOAT7": {
+      "chrom": "chr19",
+      "start": 54173412,
+      "end": 54189882,
+      "span": 16470,
+      "ambiguous_fraction": 0.004
+    },
+    "LAIR1": {
+      "chrom": "chr19",
+      "start": 54351384,
+      "end": 54370558,
+      "span": 19174,
+      "ambiguous_fraction": 0.284
+    },
+    "TTYH1": {
+      "chrom": "chr19",
+      "start": 54415219,
+      "end": 54436904,
+      "span": 21685,
+      "ambiguous_fraction": 0.001
+    }
+  },
+  "alt_contigs": {
+    "placement": {
+      "chrom": "chr19",
+      "start": 54025633,
+      "end": 55084318
+    },
+    "contigs": [
+      "chr19_GL949746v1_alt",
+      "chr19_GL949747v2_alt",
+      "chr19_GL949748v2_alt",
+      "chr19_GL949749v2_alt",
+      "chr19_GL949750v2_alt",
+      "chr19_GL949751v2_alt",
+      "chr19_GL949752v1_alt",
+      "chr19_GL949753v2_alt",
+      "chr19_KI270938v1_alt"
+    ],
+    "LILRB3": {
+      "chrom": "chr19",
+      "unique_windows": [],
+      "unique_bp": 0,
+      "gene_ambiguous_fraction": 1.0
+    },
+    "LILRA6": {
+      "chrom": "chr19",
+      "unique_windows": [],
+      "unique_bp": 0,
+      "gene_ambiguous_fraction": 1.0
+    },
+    "LILRA3_retained": {
+      "chrom": "chr19",
+      "start": 54295997,
+      "end": 54296977,
+      "ambiguous_fraction": 0.9,
+      "primary_ambiguous_fraction": 0.157
+    },
+    "controls": {
+      "PRPF31": {
+        "chrom": "chr19",
+        "start": 54115410,
+        "end": 54131719,
+        "span": 16309,
+        "ambiguous_fraction": 0.99,
+        "primary_ambiguous_fraction": 0.017,
+        "inside_alt_placement": true
+      },
+      "TMC4": {
+        "chrom": "chr19",
+        "start": 54160095,
+        "end": 54173250,
+        "span": 13155,
+        "ambiguous_fraction": 0.961,
+        "primary_ambiguous_fraction": 0.0,
+        "inside_alt_placement": true
+      },
+      "MBOAT7": {
+        "chrom": "chr19",
+        "start": 54173412,
+        "end": 54189882,
+        "span": 16470,
+        "ambiguous_fraction": 0.967,
+        "primary_ambiguous_fraction": 0.004,
+        "inside_alt_placement": true
+      },
+      "LAIR1": {
+        "chrom": "chr19",
+        "start": 54351384,
+        "end": 54370558,
+        "span": 19174,
+        "ambiguous_fraction": 0.977,
+        "primary_ambiguous_fraction": 0.284,
+        "inside_alt_placement": true
+      },
+      "TTYH1": {
+        "chrom": "chr19",
+        "start": 54415219,
+        "end": 54436904,
+        "span": 21685,
+        "ambiguous_fraction": 0.98,
+        "primary_ambiguous_fraction": 0.001,
+        "inside_alt_placement": true
+      }
+    },
+    "outside": {
+      "PRKCG": {
+        "chrom": "chr19",
+        "start": 53882196,
+        "end": 53907652,
+        "span": 25456,
+        "ambiguous_fraction": 0.004,
+        "primary_ambiguous_fraction": 0.004,
+        "inside_alt_placement": false
+      },
+      "CACNG8": {
+        "chrom": "chr19",
+        "start": 53962936,
+        "end": 53990215,
+        "span": 27279,
+        "ambiguous_fraction": 0.002,
+        "primary_ambiguous_fraction": 0.002,
+        "inside_alt_placement": false
+      },
+      "CACNG6": {
+        "chrom": "chr19",
+        "start": 53991148,
+        "end": 54012666,
+        "span": 21518,
+        "ambiguous_fraction": 0.0,
+        "primary_ambiguous_fraction": 0.0,
+        "inside_alt_placement": false
+      },
+      "PPP1R12C": {
+        "chrom": "chr19",
+        "start": 55090917,
+        "end": 55117637,
+        "span": 26720,
+        "ambiguous_fraction": 0.028,
+        "primary_ambiguous_fraction": 0.028,
+        "inside_alt_placement": false
+      },
+      "PPP6R1": {
+        "chrom": "chr19",
+        "start": 55229778,
+        "end": 55259017,
+        "span": 29239,
+        "ambiguous_fraction": 0.002,
+        "primary_ambiguous_fraction": 0.002,
+        "inside_alt_placement": false
+      }
+    }
+  }
+}

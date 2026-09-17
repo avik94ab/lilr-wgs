@@ -324,16 +324,28 @@ def _pair_check(calls: list[CNCall], bam: str, model: CoverageModel, *,
         return
 
     gene_bodies = []
+    spans = []
     for gene in ("LILRA6", "LILRB3"):
         chrom, start, end = loci.gene_span(gene)
         gene_bodies.append((chrom, start, end))
+        spans.append(end - start)
 
     measured = _mean_depth(bam, gene_bodies, loci.MAPQ_ANY,
                            reference=reference, samtools=samtools)
     if measured is None:
         return
     depth, _ = measured
-    pooled = depth / model.lambda1
+
+    # The span weight. Reads from both genes multi-map freely across both gene
+    # bodies, so the pair's whole output spreads over the *sum* of the two spans
+    # while one copy of one gene contributes coverage over one span. Mean depth
+    # over the union is therefore the pair's copy number divided by two, not the
+    # pair's copy number — and dropping the weight makes a 2+2 sample read as
+    # "pooled = 2", from which the implied LILRA6 copy number comes out at zero
+    # for everybody.
+    total_span = sum(spans)
+    mean_span = total_span / len(spans)
+    pooled = depth * total_span / (model.lambda1 * mean_span)
     implied_a6 = pooled - (b3.copies or 0)
     a6.support["pooled_pair_estimate"] = round(pooled, 2)
     a6.support["pair_implied_lilra6"] = round(implied_a6, 2)

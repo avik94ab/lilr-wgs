@@ -61,6 +61,50 @@ MIN_Q20_LRC = 0.30          # below this, MAPQ-20 windows inside the LRC are dea
 MAX_DILUTION = 1.50         # above this, reads are scattering across alt haplotypes
 
 
+# Genes used to calibrate the recruitment path. Separable from their neighbours
+# (so no shared-block inflation) and copy-number stable at 2 in >98% of
+# pangenome samples. LILRB1 was an anchor in the predecessor's CN caller but is
+# excluded here: it shares a block with LILRB4, so its depth carries both genes
+# and would bias the factor upward.
+EFFICIENCY_ANCHORS = ["LILRA1", "LILRA2", "LILRB2", "LILRB5"]
+
+
+def recruitment_efficiency(anchor_depths: dict[str, float], lambda1: float,
+                           ) -> tuple[float, int]:
+    """How much depth survives the path from CRAM to per-gene alignment.
+
+    lambda_1 is measured on the CRAM slice, but the depth a threshold is applied
+    to is measured much later — after extraction to FASTQ, recruitment against a
+    pangenome panel, cross-map arbitration, and realignment to a single per-locus
+    reference. Every one of those steps drops reads, so the two numbers are in
+    different units and comparing them directly makes every gene look
+    under-covered.
+
+    Measured on HG00096: the CRAM says lambda_1 = 19.1, so a diploid locus should
+    carry 38.2, and LILRB1's realigned median was 31 — about 19% down. Applied
+    without this correction, that shortfall becomes 27% of the gene falling below
+    a floor it should have cleared, which is the predecessor's failure mode
+    reappearing by a different route.
+
+    This does not reintroduce a relative baseline. The *copy number* still comes
+    from the CRAM-level measurement against external controls; what is estimated
+    here is the efficiency of a fixed pipeline path, which is a property of the
+    software and not of the sample's biology. The anchors are separable,
+    copy-stable genes, so their expected depth is 2 * lambda_1 by construction.
+
+    Returns:
+        (factor, n_anchors). The factor is clamped to a sane band: a value far
+        from 1 means the recruitment path is broken rather than merely lossy, and
+        silently scaling by it would hide that.
+    """
+    usable = [d for d in anchor_depths.values() if d > 0]
+    if not usable or lambda1 <= 0:
+        return 1.0, 0
+    observed = statistics.median(usable)
+    factor = observed / (2.0 * lambda1)
+    return min(1.5, max(0.3, factor)), len(usable)
+
+
 @dataclass
 class ControlMeasurement:
     """Per-base depth over one control locus, at both MAPQ floors."""
@@ -93,6 +137,10 @@ class CoverageModel:
     q20_outside: float = 0.0
     dilution: float = 0.0
     alt_verdict: str = "unknown"
+    # Depth surviving the CRAM -> FASTQ -> panel -> locus-reference path.
+    # 1.0 until measured; see recruitment_efficiency().
+    efficiency: float = 1.0
+    n_efficiency_anchors: int = 0
     gc_correction: dict[int, float] = field(default_factory=dict)
     controls: list[ControlMeasurement] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
@@ -109,10 +157,17 @@ class CoverageModel:
         return self.q20_lrc >= MIN_Q20_LRC
 
     def lambda_at(self, gc: float | None = None) -> float:
-        """λ₁ at a position of the given GC fraction."""
+        """λ₁ at a position of the given GC fraction, in per-gene-BAM units.
+
+        The efficiency factor is applied here rather than left to callers,
+        because every consumer of λ₁ works on a realigned per-gene BAM and would
+        otherwise have to remember to apply it — and forgetting would look like
+        a gene with poor coverage rather than like a missing correction.
+        """
+        lam = self.lambda1 * self.efficiency
         if gc is None or not self.gc_correction:
-            return self.lambda1
-        return self.lambda1 * self.gc_correction.get(gc_bin(gc), 1.0)
+            return lam
+        return lam * self.gc_correction.get(gc_bin(gc), 1.0)
 
     def as_row(self) -> dict:
         return {
@@ -125,6 +180,8 @@ class CoverageModel:
             "q20_outside": round(self.q20_outside, 4),
             "dilution": round(self.dilution, 4),
             "alt_verdict": self.alt_verdict,
+            "efficiency": round(self.efficiency, 4),
+            "n_efficiency_anchors": self.n_efficiency_anchors,
             "usable_mapq20": self.usable_mapq20,
             "n_controls": len(self.controls),
             "warnings": ";".join(self.warnings),

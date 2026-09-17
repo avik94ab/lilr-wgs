@@ -1,0 +1,259 @@
+# ======================================================================
+# lilr-wgs — LILR genotyping from 1000 Genomes 30x srWGS.
+#
+#   CRAM ─► [process_sample] ─► coverage model, CN, per-gene reads
+#                     │
+#                     └─► [genotype] ×11 genes ─► [summary]
+#                                                       │
+#                                        [cohort_scale] (a leaf, not a barrier)
+#
+# The DAG is embarrassingly parallel from end to end, which is the payoff of
+# measuring copy number against an absolute baseline. `lilr-genotyper` has to fit
+# its per-haploid depth unit across the whole cohort, so `cn_cohort` sits in the
+# middle of its DAG as a barrier and a cohort of fewer than ~30 samples cannot be
+# called at all. Here lambda_1 comes from each sample's own control loci, so
+# `genotype` depends only on that sample, and the cohort scale check hangs off
+# the side as a diagnostic that nothing waits for.
+# ======================================================================
+import csv
+import os
+
+configfile: os.path.join(workflow.basedir, "..", "config", "config.yaml")
+
+REPO = os.path.abspath(os.path.join(workflow.basedir, ".."))
+
+
+def _p(path):
+    """Relative config paths resolve against the repo root, so a clone runs
+    from anywhere; absolute paths are used as given."""
+    return path if os.path.isabs(path) else os.path.join(REPO, path)
+
+
+OUT = _p(config["outdir"])
+SRC = os.path.join(REPO, "src")
+GENES = [ln.strip() for ln in open(_p(config["genes_file"])) if ln.strip()]
+
+with open(_p(config["manifest"])) as _fh:
+    MANIFEST = {r["sample_id"]: r for r in csv.DictReader(_fh, delimiter="\t")}
+SAMPLES = sorted(MANIFEST)
+
+REFERENCE = _p(config["reference"])
+PANEL_DIR = _p(config["gdna_panels"])
+PANEL_IDX = _p(config["panel_index"])
+LOCUS_REFS = _p(config["locus_refs"])
+LOCUS_IDX = _p(config["locus_index"])
+EXON_DIR = _p(config["exon_coords"])
+
+PRELUDE = config.get("prelude", "")
+if PRELUDE and not PRELUDE.rstrip().endswith(";"):
+    PRELUDE = PRELUDE.rstrip() + "; "
+
+# PYTHONPATH rather than an install step, so a clone runs without `pip install -e`
+# and the code that runs is unambiguously the code in the working tree.
+PYENV = f"export PYTHONPATH={SRC}:$PYTHONPATH; "
+
+SHARED_GROUPS = config.get("shared_groups", [["LILRA6", "LILRB3"],
+                                             ["LILRB1", "LILRB4"]])
+
+wildcard_constraints:
+    sample=r"[A-Za-z0-9_.\-]+",
+    gene="|".join(GENES),
+
+
+rule all:
+    input:
+        os.path.join(OUT, "summary.csv"),
+        os.path.join(OUT, "cn", "cohort_scale.json"),
+        os.path.join(OUT, "qc", "coverage_cohort.tsv"),
+
+
+rule build_indices:
+    """bowtie2 indices for the 11 pangenome panels and the 11 per-locus refs.
+
+    Built rather than shipped: the panel indices are 29 MB of binary blobs that
+    git has no business storing when the FASTAs they derive from are already
+    here.
+    """
+    input:
+        panels=expand(os.path.join(PANEL_DIR, "{gene}.fasta"), gene=GENES),
+        refs=expand(os.path.join(LOCUS_REFS, "{gene}_named.fa"), gene=GENES),
+    output:
+        marker=os.path.join(PANEL_IDX, ".indices_built"),
+    params:
+        prelude=PRELUDE, panel_idx=PANEL_IDX, locus_idx=LOCUS_IDX,
+        panel_dir=PANEL_DIR, locus_refs=LOCUS_REFS,
+    threads: 8
+    resources:
+        h_rt="02:00:00", mem_free="8G",
+    shell:
+        r"""
+        {params.prelude}
+        bash {REPO}/scripts/build_indices.sh \
+            {params.panel_dir} {params.panel_idx} \
+            {params.locus_refs} {params.locus_idx} {threads}
+        touch {output.marker}
+        """
+
+
+rule process_sample:
+    """One sample's entire per-sample chain in a single job.
+
+    Slice the CRAM once, fit the coverage model, call copy number, recruit reads
+    to genes — with every intermediate on the compute node's local $TMPDIR. Only
+    the small outputs reach shared storage.
+
+    The fusion is inherited from the predecessor, which learned it the hard way:
+    as separate rules, the per-stage handoffs through a shared filesystem stalled
+    the scheduler on metadata latency (90-second missing-output waits) and left
+    the cluster idle. Do not split it back out.
+    """
+    input:
+        indices=os.path.join(PANEL_IDX, ".indices_built"),
+        reference=REFERENCE,
+    output:
+        coverage=os.path.join(OUT, "coverage", "{sample}.json"),
+        cn=os.path.join(OUT, "cn", "per_sample", "{sample}.tsv"),
+        shared=os.path.join(OUT, "reads", "{sample}", "shared_pairs.tsv"),
+        stats=os.path.join(OUT, "qc", "process", "{sample}.json"),
+        fastq=expand(os.path.join(OUT, "reads", "{{sample}}", "{gene}_R{r}.fq.gz"),
+                     gene=GENES, r=[1, 2]),
+    params:
+        prelude=PRELUDE, pyenv=PYENV,
+        cram=lambda w: MANIFEST[w.sample]["cram"],
+        out=OUT, panel_idx=PANEL_IDX,
+        locus_idx=LOCUS_IDX, locus_refs=LOCUS_REFS,
+        buffer=config.get("score_buffer", 2),
+        groups=" ".join(",".join(g) for g in SHARED_GROUPS),
+        keep_slices="1" if config.get("keep_slices") else "0",
+    threads: config.get("threads", {}).get("process_sample", 4)
+    resources:
+        # Sized for the remote read, not the compute. A 550 kb LRC slice from EBI
+        # took 21 s for HG00096; the ceiling is for a slow day on the network,
+        # not for the arithmetic afterwards.
+        h_rt="02:00:00", mem_free="8G",
+    shell:
+        r"""
+        {params.prelude}
+        {params.pyenv}
+        python {REPO}/scripts/process_sample.py \
+            --sample {wildcards.sample} --cram "{params.cram}" \
+            --reference {input.reference} --outdir {params.out} \
+            --panel-index {params.panel_idx} \
+            --locus-index {params.locus_idx} --locus-refs {params.locus_refs} \
+            --threads {threads} \
+            --buffer {params.buffer} --shared-groups "{params.groups}" \
+            --keep-slice {params.keep_slices}
+        """
+
+
+rule genotype:
+    """Variants, phasing and consensus for one (sample, gene).
+
+    Depends only on its own sample: copy number is absolute here, so there is no
+    cohort barrier between recruitment and calling.
+    """
+    input:
+        r1=os.path.join(OUT, "reads", "{sample}", "{gene}_R1.fq.gz"),
+        r2=os.path.join(OUT, "reads", "{sample}", "{gene}_R2.fq.gz"),
+        shared=os.path.join(OUT, "reads", "{sample}", "shared_pairs.tsv"),
+        coverage=os.path.join(OUT, "coverage", "{sample}.json"),
+        cn=os.path.join(OUT, "cn", "per_sample", "{sample}.tsv"),
+    output:
+        marker=os.path.join(OUT, "genotypes", "markers", "{sample}__{gene}.json"),
+    params:
+        prelude=PRELUDE, pyenv=PYENV, out=OUT,
+        locus_refs=LOCUS_REFS, locus_idx=LOCUS_IDX, exon=EXON_DIR,
+        alpha=config.get("depth", {}).get("alpha", 0.005),
+    threads: config.get("threads", {}).get("genotype", 2)
+    resources:
+        # Sized for the polyphase tail, not the median. `whatshap polyphase` at
+        # CN 4 took 96 min / 5.5 GB on capture data, and ploidy is not known when
+        # the DAG is built, so this applies to every genotype job.
+        h_rt="03:00:00", mem_free="8G",
+    shell:
+        r"""
+        {params.prelude}
+        {params.pyenv}
+        python -m lilrwgs.genotype \
+            {wildcards.sample} {wildcards.gene} \
+            {params.out}/reads/{wildcards.sample} \
+            {input.coverage} {input.cn} \
+            --locus-refs {params.locus_refs} --locus-index {params.locus_idx} \
+            --protein-dir {params.exon} \
+            --work-dir ${{TMPDIR:-/tmp}}/lilrwgs_gt_{wildcards.sample}_{wildcards.gene} \
+            --out-dir {params.out}/genotypes \
+            --shared-table {input.shared} \
+            --marker {output.marker} --threads {threads} --alpha {params.alpha}
+        """
+
+
+rule summary:
+    input:
+        markers=expand(os.path.join(OUT, "genotypes", "markers", "{sample}__{gene}.json"),
+                       sample=SAMPLES, gene=GENES),
+    output:
+        summary=os.path.join(OUT, "summary.csv"),
+    params:
+        prelude=PRELUDE, pyenv=PYENV, out=OUT,
+    threads: 1
+    resources:
+        h_rt="01:00:00", mem_free="4G",
+    shell:
+        r"""
+        {params.prelude}
+        {params.pyenv}
+        python {REPO}/scripts/summarise.py \
+            {params.out}/genotypes/markers {output.summary}
+        """
+
+
+rule cohort_scale:
+    """Check the cohort's copy-number scale, and report rather than rescale.
+
+    A leaf. With an absolute baseline the per-copy unit should already be 1.0;
+    if the cohort's estimates cluster on something else, lambda_1 is
+    systematically off by that factor and that is a finding, not something to
+    divide out. Nothing downstream consumes this.
+    """
+    input:
+        cn=expand(os.path.join(OUT, "cn", "per_sample", "{sample}.tsv"), sample=SAMPLES),
+    output:
+        report=os.path.join(OUT, "cn", "cohort_scale.json"),
+        merged=os.path.join(OUT, "cn", "cn_calls.tsv"),
+    params:
+        prelude=PRELUDE, pyenv=PYENV, out=OUT,
+    threads: 1
+    resources:
+        h_rt="00:30:00", mem_free="4G",
+    shell:
+        r"""
+        {params.prelude}
+        {params.pyenv}
+        python {REPO}/scripts/cohort_scale.py \
+            {params.out}/cn/per_sample {output.merged} {output.report}
+        """
+
+
+rule coverage_cohort:
+    """Every sample's coverage model in one table, with the ALT-aware verdicts.
+
+    Worth its own output because the verdict is cohort-level evidence: one
+    sample reading `not_alt_aware` is a curiosity, and all of them reading it
+    means no MAPQ-20 window in this dataset means anything.
+    """
+    input:
+        models=expand(os.path.join(OUT, "coverage", "{sample}.json"), sample=SAMPLES),
+    output:
+        table=os.path.join(OUT, "qc", "coverage_cohort.tsv"),
+    params:
+        prelude=PRELUDE, pyenv=PYENV, out=OUT,
+    threads: 1
+    resources:
+        h_rt="00:30:00", mem_free="4G",
+    shell:
+        r"""
+        {params.prelude}
+        {params.pyenv}
+        python {REPO}/scripts/coverage_cohort.py \
+            {params.out}/coverage {output.table}
+        """

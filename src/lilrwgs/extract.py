@@ -106,20 +106,26 @@ def check_remote_support(samtools: str = "samtools") -> None:
     configuration, not a hypothetical.
     """
     require(samtools)
-    features = run([samtools, "--version"]).stdout
-    for line in features.splitlines():
-        if line.strip().startswith("Features:"):
-            if "libcurl=yes" not in line:
-                raise ToolError(
-                    f"{shutil.which(samtools)} is built without libcurl "
-                    f"({line.strip()}).\n"
-                    "It cannot read CRAMs over HTTPS, which is how this pipeline "
-                    "reads 1000 Genomes data. Use the conda environment "
-                    "(environment.yml) rather than a system or module build, or "
-                    "stage CRAMs locally and point the manifest at the files."
-                )
-            return
-    raise ToolError(f"could not parse `{samtools} --version` output for a Features line")
+    version = run([samtools, "--version"]).stdout
+    # `samtools --version` prints a Features line for samtools itself and
+    # another for htslib. libcurl belongs to htslib, and on a build where the
+    # two differ the samtools line reads `build=configure curses=yes` with no
+    # mention of it — so checking only the first line reports a perfectly good
+    # installation as broken.
+    features = [ln.strip() for ln in version.splitlines()
+                if ln.strip().startswith("Features:")]
+    if not features:
+        raise ToolError(
+            f"could not parse `{samtools} --version` for a Features line")
+    if not any("libcurl=yes" in line for line in features):
+        raise ToolError(
+            f"{shutil.which(samtools)} is built without libcurl.\n"
+            + "\n".join(f"  {line}" for line in features) + "\n"
+            "It cannot read CRAMs over HTTPS, which is how this pipeline reads "
+            "1000 Genomes data. Use the conda environment (environment.yml) "
+            "rather than a system or module build, or stage CRAMs locally and "
+            "point the manifest at the files."
+        )
 
 
 def slice_cram(
@@ -150,8 +156,13 @@ def slice_cram(
         present in the CRAM header.
     """
     require(samtools)
-    out_bam = Path(out_bam)
+    out_bam = Path(out_bam).resolve()
     out_bam.parent.mkdir(parents=True, exist_ok=True)
+    # The stages below run in a scratch cwd, so every path handed to a tool has
+    # to be absolute. A relative reference resolves against the scratch dir and
+    # fails with "Failed to open reference file", which points at the reference
+    # rather than at the cwd and is a genuinely confusing place to start looking.
+    reference = Path(reference).resolve()
     tmp = Path(tmpdir or os.environ.get("TMPDIR", "/tmp")) / f"lilrwgs_slice_{sample}"
     tmp.mkdir(parents=True, exist_ok=True)
     env = cram_env(reference)
@@ -183,7 +194,12 @@ def slice_cram(
     try:
         pipeline(
             [
-                [samtools, "view", "-u", "-T", str(reference), "-F", str(EXCLUDE_FLAGS),
+                # -M: with several regions, samtools emits a read once per
+                # region it overlaps unless told otherwise. The regions are
+                # merged upstream, but overlap here doubles depth rather than
+                # erroring, so both guards are kept.
+                [samtools, "view", "-u", "-M", "-T", str(reference),
+                 "-F", str(EXCLUDE_FLAGS),
                  "-@", str(max(1, threads // 2)), cram, *regions],
                 [samtools, "sort", "-@", str(max(1, threads // 2)),
                  "-T", str(tmp / "sort"), "-o", str(out_bam), "-"],
@@ -241,7 +257,10 @@ def to_fastq(
         so the rate is reported rather than quietly discarded.
     """
     require(samtools)
-    out_r1, out_r2 = Path(out_r1), Path(out_r2)
+    # Absolute, for the same reason as in slice_cram: these stages run in a
+    # scratch cwd.
+    bam = Path(bam).resolve()
+    out_r1, out_r2 = Path(out_r1).resolve(), Path(out_r2).resolve()
     out_r1.parent.mkdir(parents=True, exist_ok=True)
     out_r2.parent.mkdir(parents=True, exist_ok=True)
 
@@ -255,7 +274,7 @@ def to_fastq(
     stages = [
         # -u: uncompressed BAM between stages; the pipe is local and CPU time is
         # worth more here than the bytes.
-        [samtools, "view", "-u", "-@", str(half), str(bam), *regions],
+        [samtools, "view", "-u", "-M", "-@", str(half), str(bam), *regions],
         # The slice is coordinate-sorted and `samtools fastq` needs mates
         # adjacent. collate, not `sort -n`: it groups by name without a full
         # sort, which is all that is needed and much cheaper.

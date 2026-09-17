@@ -1,0 +1,12 @@
+##gff-version 3
+##PAF	LILRA4	499	0	499	-	LILRA4	8520	1501	7020	1497	1497	0	AS:i:2403	ms:i:2663	np:i:499	fs:i:0	st:i:0	da:i:0	do:i:0	cg:Z:11M161U11M188U94M163U99M242U98M259U100M2878U16M152U63M	cs:Z::11*gG~gt158ag-gg:11*gE~gt185ag-aa:94*gA~gt160ag-cc:99*gG~gt239ag-gc:98*gG~gt256ag-ga:100*gG~gt2875ag-ga:16*gA~gt149ag-cc:63
+LILRA4	miniprot	mRNA	1499	7020	2663	-	.	ID=MP000001;Rank=1;Identity=1.0000;Positive=1.0000;Target=LILRA4 1 499
+LILRA4	miniprot	CDS	6987	7020	57	-	0	Parent=MP000001;Rank=1;Identity=1.0000;Target=LILRA4 1 11
+LILRA4	miniprot	CDS	6793	6828	58	-	2	Parent=MP000001;Rank=1;Identity=1.0000;Target=LILRA4 12 23
+LILRA4	miniprot	CDS	6323	6607	528	-	2	Parent=MP000001;Rank=1;Identity=1.0000;Target=LILRA4 24 118
+LILRA4	miniprot	CDS	5863	6162	544	-	2	Parent=MP000001;Rank=1;Identity=1.0000;Target=LILRA4 119 218
+LILRA4	miniprot	CDS	5327	5623	525	-	2	Parent=MP000001;Rank=1;Identity=1.0000;Target=LILRA4 219 317
+LILRA4	miniprot	CDS	4768	5070	538	-	2	Parent=MP000001;Rank=1;Identity=1.0000;Target=LILRA4 318 418
+LILRA4	miniprot	CDS	1842	1892	83	-	2	Parent=MP000001;Rank=1;Identity=1.0000;Target=LILRA4 419 435
+LILRA4	miniprot	CDS	1499	1692	330	-	2	Parent=MP000001;Rank=1;Identity=1.0000;Target=LILRA4 436 499
+LILRA4	miniprot	stop_codon	1499	1501	0	-	0	Parent=MP000001;Rank=1
