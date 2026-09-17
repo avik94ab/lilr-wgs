@@ -221,13 +221,69 @@ def gene_span(name: str) -> tuple[str, int, int]:
     return (g.chrom, g.start, g.end)
 
 
-def extraction_regions(include_alts: bool = True) -> list[str]:
-    """Region strings for ``samtools view``, covering everything a LILR read
-    could be aligned to: the primary cluster, and the alt contigs that carry
-    LILRA3 and its neighbours.
+def as_region(chrom: str, start: int, end: int) -> str:
+    """0-based half-open -> a 1-based inclusive samtools region string."""
+    return f"{chrom}:{start + 1}-{end}"
+
+
+# Flank added around every fetched interval. A 1000 Genomes library has a ~450 bp
+# insert, so 1 kb keeps pairs intact at an interval's edge with room to spare;
+# the LRC slice carries far more than this by construction.
+FLANK = 1_000
+
+
+def alt_regions(flank: int = 20_000) -> list[tuple[str, int, int]]:
+    """The LILRA3-bearing intervals on the four alt contigs that carry it.
+
+    Deliberately not the whole contigs. The nine LRC alt haplotypes are ~1 Mb
+    each, and fetching all nine in full would multiply the slice for sequence
+    that is irrelevant to every gene here except LILRA3. The flank is generous
+    because the interval boundaries come from a 41-mer anchoring rather than from
+    an annotation, and being wrong by a few kb should cost coverage, not data.
     """
-    chrom, start, end = LRC_SLICE
-    regions = [f"{chrom}:{start + 1}-{end}"]   # samtools regions are 1-based
+    return [(contig, max(0, start - flank), end + flank)
+            for contig, start, end in LILRA3_ALT]
+
+
+def extraction_regions(include_alts: bool = True) -> list[str]:
+    """Everywhere a LILR read could have been aligned.
+
+    The primary cluster, plus the alt-contig intervals carrying LILRA3. Omitting
+    the latter does not merely lose precision — a read from a LILRA3-bearing
+    chromosome has its *only* primary alignment there, so the gene goes missing
+    and every sample reads as a deletion homozygote.
+    """
+    regions = [as_region(*LRC_SLICE)]
     if include_alts:
-        regions.extend(ALT_CONTIGS)
+        regions.extend(as_region(*r) for r in alt_regions())
     return regions
+
+
+def depth_regions() -> list[str]:
+    """Everything the coverage model measures: both control sets, and the
+    LILRA3 junction neighbourhood, which sits outside the LRC slice's targets.
+
+    These are separate from :func:`extraction_regions` because the controls are
+    deliberately *outside* the LILR cluster — PRKCG at 53.88 Mb and PPP6R1 at
+    55.23 Mb are outside the alt placement entirely, which is the whole reason
+    they can answer whether the alignment was ALT-aware.
+    """
+    regions = [as_region(c.chrom, c.start - FLANK, c.end + FLANK)
+               for c in ALL_CONTROLS]
+    chrom, pos = LILRA3_JUNCTION
+    regions.append(as_region(chrom, pos - 2_000, pos + 2_000))
+    return regions
+
+
+def slice_regions(include_alts: bool = True) -> list[str]:
+    """One remote pass per sample: everything any stage will need.
+
+    Extraction and the coverage model need different intervals, and a CRAM read
+    over HTTPS is the expensive part of a sample. Fetching the union once and
+    working locally afterwards costs a little disk and saves a second traversal,
+    which matters at 2,504 samples.
+    """
+    seen: dict[str, None] = {}
+    for region in extraction_regions(include_alts) + depth_regions():
+        seen[region] = None
+    return list(seen)
