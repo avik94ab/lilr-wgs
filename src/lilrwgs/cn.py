@@ -112,17 +112,29 @@ def integerise(estimate: float, gene: str) -> tuple[int, float]:
 
 def _mean_depth(bam: str, intervals: list[tuple[str, int, int]], mapq: int,
                 *, reference: str | None = None, samtools: str = "samtools",
+                supplementary: bool = False,
                 ) -> tuple[float, int] | None:
     """Mean per-base depth over a set of intervals, and the bases behind it.
 
+    Args:
+        supplementary: count supplementary alignments. False everywhere except
+            LILRA3, where they are the entire signal — see
+            :func:`_call_lilra3`.
+
     Returns None — never 0.0 — when the measurement could not be made. At
-    LILRA3, zero is the *expected* answer for a deletion homozygote at ~15-20%
+    LILRA3, zero is the *expected* answer for a deletion homozygote at ~24%
     allele frequency, so conflating "no reads" with "could not ask" would
     manufacture deletions out of failed queries.
     """
     require(samtools)
     bed = "".join(f"{c}\t{s}\t{e}\n" for c, s, e in intervals)
-    cmd = [samtools, "depth", "-a", "-Q", str(mapq), "-b", "/dev/stdin"]
+    # -G excludes a flag class. Built here rather than spliced in afterwards:
+    # inserting it at the wrong index puts it before the `depth` subcommand,
+    # which samtools rejects — and since a failed query returns None, the
+    # symptom was every LILRA6 and LILRB3 call coming back "failed" rather than
+    # anything pointing at a malformed command.
+    exclude = [] if supplementary else ["-G", "0x800"]
+    cmd = [samtools, "depth", "-a", "-Q", str(mapq), *exclude, "-b", "/dev/stdin"]
     if reference:
         cmd += ["--reference", reference]
     cmd.append(bam)
@@ -268,15 +280,29 @@ def _call_lilra3(sample: str, bam: str, model: CoverageModel, *,
     # like, and dividing a MAPQ-0 count by a MAPQ-20 baseline would inflate it by
     # whatever fraction of the baseline's reads are repeat-derived.
     lrc_q0 = [c.mean_q0 for c in model.controls if c.inside_placement and c.mean_q0 > 0]
+    # supplementary=True: `bwa mem -Y` emits the ALT-contig hit of an ALT-aware
+    # alignment as a supplementary record, and since LILRA3 is absent from the
+    # primary assembly that is where essentially all of its evidence sits. On
+    # HG00099, 481 of 547 records over one alt interval are supplementary;
+    # excluding them made a two-copy donor read as a deletion homozygote.
     measured = _mean_depth(bam, loci.LILRA3_ALT, loci.MAPQ_ANY,
-                           reference=reference, samtools=samtools)
+                           reference=reference, samtools=samtools,
+                           supplementary=True)
 
     if measured is not None and lrc_q0:
         depth, n_bases = measured
+        # Sum across the four intervals, divide by ONE interval's length. A read
+        # from a LILRA3-bearing chromosome lands on exactly one of the four --
+        # measured on HG00099, two of the contigs share zero read names out of
+        # 518 and 464 -- so the four counts partition the evidence rather than
+        # replicating it. `_mean_depth` averages over all four intervals, so the
+        # per-interval mean has to be multiplied back up by their number.
+        depth = depth * len(loci.LILRA3_ALT)
         baseline_haploid = statistics.median(lrc_q0) / 2.0
         call.estimate = depth / baseline_haploid if baseline_haploid > 0 else None
-        call.support["mean_depth"] = round(depth, 2)
+        call.support["summed_depth"] = round(depth, 2)
         call.support["n_bases"] = n_bases
+        call.support["n_alt_intervals"] = len(loci.LILRA3_ALT)
 
     if call.estimate is None and junction_estimate is not None:
         call.estimate = junction_estimate

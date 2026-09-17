@@ -153,3 +153,44 @@ class TestFitUnit:
 
     def test_recovers_a_stretched_unit(self):
         assert abs(_fit_unit([1.15, 2.30, 3.45, 2.30, 4.60]) - 1.15) < 0.03
+
+
+class TestDepthCommand:
+    """The samtools command must be well-formed.
+
+    A flag spliced in at the wrong index landed before the `depth` subcommand.
+    samtools rejected it, `_mean_depth` turned the failure into None, and the
+    symptom was every LILRA6 and LILRB3 call coming back "failed" — nothing in
+    the output pointed at a malformed command line.
+    """
+
+    def _command(self, monkeypatch, **kwargs) -> list[str]:
+        from lilrwgs import cn as cn_mod
+
+        seen: list[list[str]] = []
+
+        def fake_run(cmd, **_):
+            seen.append(cmd)
+            class R:
+                stdout = "chr19\t100\t30\n"
+            return R()
+
+        monkeypatch.setattr(cn_mod, "run", fake_run)
+        monkeypatch.setattr(cn_mod, "require", lambda *a, **k: None)
+        cn_mod._mean_depth("x.bam", [("chr19", 0, 10)], 20, **kwargs)
+        return seen[0]
+
+    def test_subcommand_comes_first(self, monkeypatch):
+        cmd = self._command(monkeypatch)
+        assert cmd[1] == "depth", f"argv[1] must be the subcommand, got {cmd[:4]}"
+
+    def test_supplementary_excluded_by_default(self, monkeypatch):
+        cmd = self._command(monkeypatch)
+        assert "-G" in cmd and cmd[cmd.index("-G") + 1] == "0x800"
+
+    def test_supplementary_kept_when_asked(self, monkeypatch):
+        """LILRA3's evidence is almost entirely supplementary records, because
+        bwa -Y puts an ALT-contig hit there and LILRA3 has no primary locus."""
+        cmd = self._command(monkeypatch, supplementary=True)
+        assert "-G" not in cmd
+        assert cmd[1] == "depth"

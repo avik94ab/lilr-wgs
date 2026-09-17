@@ -39,8 +39,21 @@ from pathlib import Path
 from . import loci
 from .shell import ToolError, Result, pipeline, require, run
 
-# Records excluded at the slice: secondary (0x100), QC-fail (0x200),
-# duplicate (0x400), supplementary (0x800).
+# Records excluded at the slice: secondary (0x100), QC-fail (0x200) and
+# duplicate (0x400). Supplementary (0x800) is deliberately KEPT.
+#
+# Keeping supplementary alignments looks wrong and is load-bearing. NYGC ran
+# `bwa mem -Y`, which emits the ALT-contig hit of an ALT-aware alignment as a
+# *supplementary* record while the primary alignment goes to the primary
+# assembly. LILRA3 is not on the primary assembly at all, so on the four alt
+# contigs that carry it, 481 of HG00099's 547 records are supplementary —
+# excluding them left 64 and made a donor with two LILRA3 copies read as a
+# deletion homozygote. Since LILRA3 CN 0 is common, that is a wrong answer
+# shaped exactly like a right one.
+#
+# They are excluded again in `to_fastq`, because a supplementary record is a
+# fragment of a read that is already in the file and would otherwise be emitted
+# a second time.
 #
 # Duplicate handling is one of the sharpest differences from the capture
 # pipeline, which skips MarkDuplicates outright: in targeted capture, read pairs
@@ -50,7 +63,11 @@ from .shell import ToolError, Result, pipeline, require, run
 # CRAMs arrive duplicate-marked by NYGC, so the flags are honoured rather than
 # recomputed — and recomputing them on a 550 kb slice would be wrong anyway,
 # since duplicate detection needs the whole library to judge.
-EXCLUDE_FLAGS = 0xF00
+EXCLUDE_FLAGS = 0x700
+
+# Supplementary. Excluded everywhere a *read* is wanted, kept everywhere the
+# question is how much sequence aligned to a place.
+SUPPLEMENTARY = 0x800
 
 
 @dataclass
@@ -274,7 +291,11 @@ def to_fastq(
     stages = [
         # -u: uncompressed BAM between stages; the pipe is local and CPU time is
         # worth more here than the bytes.
-        [samtools, "view", "-u", "-M", "-@", str(half), str(bam), *regions],
+        # -F SUPPLEMENTARY here and not at the slice: a supplementary record is
+        # a fragment of a read already present, and turning it into a FASTQ
+        # entry would emit that read twice under the same name.
+        [samtools, "view", "-u", "-M", "-F", str(SUPPLEMENTARY),
+         "-@", str(half), str(bam), *regions],
         # The slice is coordinate-sorted and `samtools fastq` needs mates
         # adjacent. collate, not `sort -n`: it groups by name without a full
         # sort, which is all that is needed and much cheaper.

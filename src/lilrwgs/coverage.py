@@ -294,8 +294,13 @@ def _depth_by_region(bam: str | os.PathLike, regions: list[tuple[str, int, int]]
     """
     require(samtools)
     bed_lines = "".join(f"{c}\t{s}\t{e}\n" for c, s, e in regions)
+    # -G 0x800 excludes supplementary. The slice keeps them because LILRA3's
+    # evidence lives there, but lambda_1 must be measured the way it always was:
+    # at unique control sequence a supplementary record is a misplaced fragment,
+    # not extra coverage, and counting it would inflate the baseline that every
+    # threshold is expressed in.
     cmd = [samtools, "depth", "-a", "-q", str(MIN_BASEQ), "-Q", str(mapq),
-           "-b", "/dev/stdin"]
+           "-G", "0x800", "-b", "/dev/stdin"]
     if reference:
         cmd += ["--reference", str(reference)]
     cmd.append(str(bam))
