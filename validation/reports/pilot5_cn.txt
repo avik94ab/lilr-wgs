@@ -1,0 +1,9 @@
+copy-number accuracy vs HPRC truth — AS-IS (donor's own haplotypes are in the panel; this overstates accuracy)
+truth includes CN 0 inferred from panel absence (--counted-only to exclude)
+
+gene         n    confident      flagged   overall
+LILRA3       5   5/5 100.0%            -    100.0%
+LILRA6       5   3/3 100.0%   2/2 100.0%    100.0%
+LILRB3       5   3/3 100.0%   2/2 100.0%    100.0%
+
+confusion (truth -> called), where they differ:

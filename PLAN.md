@@ -155,8 +155,9 @@ Each phase ends with something that runs and something that is checked.
       track, phasing, consensus masked by the same track, CDS/cDNA/protein.
 - [x] **Phase 7 — orchestration.** Snakemake DAG with no cohort barrier, SGE and local
       profiles, the fused per-sample rule.
-- [ ] **Phase 8 — validation.** Truth set built (232 donors, 101 in 1KGP). Scoring across
-      the overlap, as-is and leave-one-donor-out, is the remaining work.
+- [~] **Phase 8 — validation.** Truth set built (232 donors, 101 in 1KGP). A five-donor
+      pilot spanning LILRA6 CN 1-4 and LILRA3 CN 0/2 scores **15/15**. The full 101-donor
+      run, and the leave-one-donor-out scoring that removes the circularity, remain.
 - [x] **Phase 9 — documentation.** README, `CLAUDE.md`, `docs/method.md`.
 
 ---

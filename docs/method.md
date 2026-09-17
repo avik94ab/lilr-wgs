@@ -257,9 +257,38 @@ its own haplotypes, which inflates recruitment and accuracy relative to an unsee
 sample. `build_truth.py --leave-one-donor-out` writes donor-excluded panels, and
 that score is the one that generalises. Both are reported, labelled.
 
-## 9. What is not yet established
+## 9. Pilot result
 
-- Accuracy against the 101-donor truth set, as-is and leave-one-donor-out.
+Five donors from the overlap, chosen to span the hard range rather than to be
+easy — LILRA6 at CN 1, 2, 2, 3 and 4, and LILRA3 at CN 0 and 2:
+
+| sample | gene | truth | called | estimate |
+|---|---|---|---|---|
+| HG02155 | LILRA6 | 1 | 1 | 0.961 |
+| HG00099 | LILRA6 | 2 | 2 | 2.336 |
+| NA18608 | LILRA6 | 2 | 2 | 2.093 |
+| HG00140 | LILRA6 | 3 | 3 | 3.149 |
+| HG02922 | LILRA6 | 4 | 4 | 3.779 |
+| NA18608 | LILRA3 | 0 | 0 | 0.002 |
+| HG00099 / HG00140 / HG02155 / HG02922 | LILRA3 | 2 | 2 | 2.047 / 1.933 / 2.034 / 1.989 |
+| all five | LILRB3 | 2 | 2 | 1.758 – 2.267 |
+
+**15 of 15 correct.** All five samples read `alt_aware`; λ₁ ranged 16.6–20.6 and
+the recruitment efficiency 0.750–0.799.
+
+This is a pilot, and it should be read as one. Five samples cannot distinguish a
+method that is right from one that is right on easy cases, the scoring is *as-is*
+rather than leave-one-donor-out, and LILRA6 at CN 4 is represented once. What it
+does establish is that the measurement is not grossly biased and that the hard
+classes — a LILRA6 hemizygote, a LILRA6 at four copies, a LILRA3 deletion
+homozygote — are separable at 30× at all.
+
+It is also the step that found the LILRA3 bug. Before the truth set existed, a
+uniform "LILRA3 CN 0" across every sample looked entirely plausible.
+
+## 10. What is not yet established
+
+- Accuracy across the full 101-donor overlap, as-is and leave-one-donor-out.
 - Whether 30× supports LILRA6 CN ≥ 4. Separating CN 4 from CN 5 means separating
   60× from 75×: feasible per position, marginal per sample. The truth set
   contains 16 donors at CN 4, 5 at CN 5 and 2 at CN 6.

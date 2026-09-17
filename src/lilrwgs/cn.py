@@ -103,9 +103,17 @@ def integerise(estimate: float, gene: str) -> tuple[int, float]:
     number derived from a broken measurement cannot masquerade as a good call.
     """
     lo, hi = CN_RANGE.get(gene, (0, 6))
-    copies = int(min(hi, max(lo, round(estimate))))
-    confidence = 1.0 - 2.0 * abs(estimate - round(estimate))
-    if estimate < lo or estimate > hi:
+    nearest = round(estimate)
+    copies = int(min(hi, max(lo, nearest)))
+    confidence = 1.0 - 2.0 * abs(estimate - nearest)
+
+    # The penalty applies only when clamping actually changed the answer. An
+    # estimate of 2.047 at a gene capped at CN 2 rounds to 2 either way and is a
+    # good call; treating "outside the range" as "outside by any amount" scored
+    # four of five correct LILRA3 calls at zero confidence, which would flag them
+    # as ambiguous and -- since the flag fires unevenly across copy-number
+    # classes -- bias any allele frequency computed from the confident subset.
+    if nearest != copies:
         confidence = 0.0
     return copies, max(0.0, confidence)
 

@@ -50,6 +50,16 @@ class TestIntegerise:
         at the boundary."""
         assert integerise(9.0, "LILRA3")[1] == 0.0
 
+    def test_just_over_the_cap_is_still_confident(self):
+        """2.047 at a gene capped at CN 2 rounds to 2 whether or not it is
+        clamped, so it is a good call. Penalising it flagged four of five
+        correct LILRA3 calls as ambiguous, and a flag that fires unevenly
+        across copy-number classes biases any frequency computed from the
+        confident subset."""
+        copies, confidence = integerise(2.047, "LILRA3")
+        assert copies == 2
+        assert confidence > 0.85
+
     def test_ambiguous_band_is_flagged(self):
         call = CNCall(sample="S", gene="LILRA6", status="measured")
         call.estimate = 2.5
