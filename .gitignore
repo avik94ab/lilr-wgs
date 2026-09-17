@@ -1,0 +1,41 @@
+# Results and scratch
+results/
+work/
+input/
+logs/*
+!logs/.gitkeep
+.snakemake/
+
+# Fetched / built resources — see scripts/fetch_reference.sh, scripts/build_indices.sh
+resources/reference/
+resources/gdna_index/
+resources/locus_index/
+*.bt2
+*.fa.fai
+*.fa.gz.fai
+*.fa.gz.gzi
+*.dict
+*.cram
+*.crai
+*.bam
+*.bai
+
+# Sample sheets are cohort-specific
+config/samples.tsv
+config/manifest.tsv
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.venv/
+venv/
+
+# Editors / OS
+.DS_Store
+*.swp
+.claude/
