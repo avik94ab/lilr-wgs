@@ -1,5 +1,10 @@
 #!/bin/bash
-# build_indices.sh PANEL_DIR PANEL_IDX LOCUS_REFS LOCUS_IDX THREADS
+# build_indices.sh PANEL_DIR PANEL_IDX LOCUS_REFS LOCUS_IDX THREADS [WHICH]
+#
+# WHICH is `all` (default) or `panels`. `panels` exists for leave-one-donor-out
+# validation, where each donor gets its own recruitment panel but they all share
+# one set of per-locus calling references — and where 101 jobs each checking the
+# shared locus index is 101 chances to race on it.
 #
 # bowtie2 indices for the 11 HPRC pangenome panels (read recruitment) and the 11
 # single per-locus references (variant calling). Built rather than shipped: they
@@ -13,9 +18,12 @@
 set -euo pipefail
 PANEL_DIR="${1:?panel dir}"; PANEL_IDX="${2:?panel index dir}"
 LOCUS_REFS="${3:?locus ref dir}"; LOCUS_IDX="${4:?locus index dir}"
-THREADS="${5:-4}"
+THREADS="${5:-4}"; WHICH="${6:-all}"
 
-mkdir -p "$PANEL_IDX" "$LOCUS_IDX"
+mkdir -p "$PANEL_IDX"
+if [ "$WHICH" = "all" ]; then
+    mkdir -p "$LOCUS_IDX"
+fi
 
 for fa in "$PANEL_DIR"/*.fasta; do
     gene=$(basename "$fa" .fasta)
@@ -26,14 +34,16 @@ for fa in "$PANEL_DIR"/*.fasta; do
     bowtie2-build --threads "$THREADS" "$fa" "$PANEL_IDX/$gene" > /dev/null
 done
 
-for fa in "$LOCUS_REFS"/*_named.fa; do
-    gene=$(basename "$fa" _named.fa)
-    if [ -f "$LOCUS_IDX/${gene}.1.bt2" ]; then
-        echo "locus $gene: index present, skipping"; continue
-    fi
-    echo "locus $gene: building"
-    bowtie2-build --threads "$THREADS" "$fa" "$LOCUS_IDX/$gene" > /dev/null
-    samtools faidx "$fa"
-done
+if [ "$WHICH" = "all" ]; then
+    for fa in "$LOCUS_REFS"/*_named.fa; do
+        gene=$(basename "$fa" _named.fa)
+        if [ -f "$LOCUS_IDX/${gene}.1.bt2" ]; then
+            echo "locus $gene: index present, skipping"; continue
+        fi
+        echo "locus $gene: building"
+        bowtie2-build --threads "$THREADS" "$fa" "$LOCUS_IDX/$gene" > /dev/null
+        samtools faidx "$fa"
+    done
+fi
 
 echo "indices ready"

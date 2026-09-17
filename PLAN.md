@@ -74,7 +74,7 @@ Not rewriting what already works:
 | `lilr-genotyper/workflow/scripts/filter_crossmapped.py` | paired-AS cross-map arbitration with `shared_groups` for the inseparable pairs (LILRA6/LILRB3, LILRB1/LILRB4) | ported nearly verbatim into `lilrwgs.assign`; the shared-group logic is load-bearing and stays |
 | `lilr-genotyper/resources/gdna/*.fasta` | 11 HPRC pangenome gene panels, 231 donors | shipped unchanged; both the alignment target **and** the truth set (§6) |
 | `lilr-genotyper` bundle `sequence_builder.py` | IUPAC-aware translation, CDS/cDNA extraction | ported into `lilrwgs.sequences` |
-| `lilrCN_aou/resources/lilr_loci.json` + `lilr_cn.md` | GRCh38 coordinates: LILRA6/LILRB3 paralogue-unique windows, LILRA3 deletion junction at chr19:54,296,977, control loci inside and outside the alt placement, the ALT-awareness verdict | the coordinate basis of `lilrwgs.loci` and `lilrwgs.coverage` |
+| `lilrCN_aou/resources/lilr_loci.json` + `lilr_cn.md` | GRCh38 coordinates: LILRA6/LILRB3 paralogue-unique windows, the LILRA3 deletion junction, control loci inside and outside the alt placement, the ALT-awareness verdict | the coordinate basis of `lilrwgs.loci` and `lilrwgs.coverage`. All re-measured here; the junction was 28 bp out (§9) |
 | **PING** (`Hollenbach-lab/PING`) | see below | |
 
 From PING specifically:
@@ -155,9 +155,12 @@ Each phase ends with something that runs and something that is checked.
       track, phasing, consensus masked by the same track, CDS/cDNA/protein.
 - [x] **Phase 7 — orchestration.** Snakemake DAG with no cohort barrier, SGE and local
       profiles, the fused per-sample rule.
-- [~] **Phase 8 — validation.** Truth set built (232 donors, 101 in 1KGP). A five-donor
-      pilot spanning LILRA6 CN 1-4 and LILRA3 CN 0/2 scores **15/15**. The full 101-donor
-      run, and the leave-one-donor-out scoring that removes the circularity, remain.
+- [x] **Phase 8 — validation.** Truth set built (232 donors, 101 in 1KGP). The full
+      101-donor run scores **LILRB3 100%, LILRA6 99%, LILRA3 95%** as-is; see §9 for
+      what the disagreements turned out to be and §10 for the number that generalises.
+      Two bugs found by running it: the LILRA3 junction assay had been measuring
+      nothing, and the cohort-scale diagnostic was crying wolf on the one gene that
+      scored perfectly.
 - [x] **Phase 9 — documentation.** README, `CLAUDE.md`, `docs/method.md`.
 
 ---
@@ -250,3 +253,68 @@ answered for depth, and not at all for haplotype *sequence* accuracy.
 CN 0–6 and LILRA3 CN 0–2 at a 24% deletion allele frequency. It also confirmed, rather than
 assumed, that LILRA1/LILRA2/LILRB2/LILRB5 are copy-stable at 2 in 231 of 232 donors — which
 is what justifies using them as the recruitment-efficiency anchors.
+
+---
+
+## 9. What the 101-donor run established
+
+The full HPRC overlap, scored as-is (the donor's own haplotypes are still in the panel,
+so these numbers are optimistic — §10 is the honest one).
+
+| gene | n | confident | flagged | overall |
+|---|---|---|---|---|
+| LILRA3 | 101 | 96/100 96.0% | 0/1 | 95.0% |
+| LILRA6 | 101 | 87/87 100% | 13/14 92.9% | 99.0% |
+| LILRB3 | 101 | 83/83 100% | 18/18 100% | 100% |
+
+Against counted truth only, LILRA3 is 83/84 confident, 97.6% overall.
+
+**All six disagreements are informative, and five of them are the truth set's.**
+
+- Three LILRA3 calls of 1 against a truth of 0 (NA18620, NA18960, NA18982) are every
+  one of them an `inferred_absent` entry — a CN 0 deduced from the donor being missing
+  from that panel, not counted. In all three the junction assay reads heterozygous
+  (21–22 clipped against 9–17 spanning) on evidence that shares no failure mode with
+  the depth route. Two independent assays say these donors carry LILRA3.
+- Two LILRA3 calls of 2 against a counted truth of 1 (NA18945, NA21093) have
+  **zero** spanning reads at the breakpoint, out of 44 and 57 clipped. A chromosome
+  carrying the deletion matches the primary assembly and its reads cross that base
+  cleanly; none do. There is no deleted chromosome in either donor, so the panel is
+  a haplotype short.
+- One LILRA6 call of 6 against a truth of 5 (NA20827) is the only genuine miss, at
+  an estimate of 5.54 and a confidence of 0.079 — flagged, and about as flagged as
+  the scale allows. **This answers open question 2**: 30× separates LILRA6 CN 0–4
+  cleanly and goes marginal between 5 and 6, which is where λ₁ ≈ 15 predicted it
+  would.
+
+So the measured lower bound on accuracy is the table above; the pipeline's own
+disagreement rate with a *correct* truth set is one call in 303.
+
+**The cohort has no ALT-awareness problem.** All 101 donors report `alt_aware`, and
+`usable_mapq20` is true throughout, so no call fell back to `not_measured`.
+
+**Two bugs, both of the house type — plausible output rather than an error.**
+
+1. *The LILRA3 junction assay had never worked.* The breakpoint constant inherited
+   from `lilrCN_aou`, chr19:54,296,977, is 28 bp left of where reads actually clip,
+   and the ±10 bp window around it saw nothing. `clipped` came back 0–4 for every
+   donor regardless of copy number, so the assay silently contributed nothing — and
+   because the depth route then disagreed with it by construction, every
+   LILRA3-bearing donor picked up a "treat this call as unresolved" note. The pilot
+   read that as a real conflict. Corrected to 54,297,005 with 5 bp of microhomology,
+   `spanning` is 0 in 65/65 donors of truth CN 2 and `clipped` ≤ 1 in 13/16 of truth
+   CN 0. The assay that was doing nothing is now the thing that adjudicates the truth
+   set.
+2. *The cohort-scale check cried wolf on the perfect gene.* `_fit_unit` reported
+   LILRB3 clustering on a unit of 0.700 and declared λ₁ "systematically off by that
+   factor" — for the gene that scored 100%. The unit is a *spacing*, and LILRB3 in
+   this cohort is 99 donors at CN 2 and 2 at CN 1: one class constrains nothing, and
+   0.700 beat the correct 1.03 by 1.6% of cost. It now declines to fit unless two
+   copy-number classes each carry ≥ 5 samples. LILRA6 fits 1.015 and LILRA3 0.977,
+   which is the check doing its job.
+
+**Operationally, the cohort is cheap.** Slicing is the only networked step and the
+only slow one: 101 slices in 20 minutes at 8 concurrent, then ~6 minutes of pure
+compute per sample, embarrassingly parallel. Wynton's compute nodes have no outbound
+route at all, so `scripts/stage_slices.py` exists to put the one remote pass somewhere
+that does — which is also the right shape for 2,504 samples.

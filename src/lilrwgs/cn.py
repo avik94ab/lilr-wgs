@@ -33,6 +33,7 @@ survives as an optional check on the scale, not as a prerequisite.
 
 from __future__ import annotations
 
+import json
 import math
 import re
 import statistics
@@ -89,6 +90,11 @@ class CNCall:
             "status": self.status,
             "ambiguous": self.ambiguous,
             "notes": ";".join(self.notes),
+            # The raw counts the call was made from — depths, junction reads, the
+            # pooled-pair figures. Carried because a copy number without its
+            # evidence cannot be re-adjudicated later, and in this cluster the
+            # calls that need re-adjudicating are exactly the plausible ones.
+            "support": json.dumps(self.support, sort_keys=True),
         }
 
 
@@ -162,8 +168,18 @@ def _mean_depth(bam: str, intervals: list[tuple[str, int, int]], mapq: int,
     return total / n, n
 
 
+# A clip has to be long enough to be sequence rather than a trimmed base or two,
+# and the aligned part long enough to place it. Both at 10 bp, which also makes
+# the two read classes comparable: a spanning read is required to hold 10 aligned
+# bases either side of the breakpoint, a clipped one 10 aligned and 10 clipped.
+MIN_CLIP = MIN_ANCHOR = 10
+# The breakpoint's two ends are 5 bp apart, and where a read's clip is assigned
+# within that depends on the aligner's tie-break, so allow a few bases either way.
+JUNCTION_TOLERANCE = 5
+
+
 def junction_counts(bam: str, *, reference: str | None = None,
-                    samtools: str = "samtools", window: int = 200,
+                    samtools: str = "samtools", window: int = 300,
                     ) -> tuple[int, int] | None:
     """Reads clipped at the LILRA3 deletion junction, and reads spanning it.
 
@@ -172,11 +188,17 @@ def junction_counts(bam: str, *, reference: str | None = None,
     one carrying LILRA3 diverges there and its reads soft-clip. The clipped
     fraction estimates half the copy number.
 
+    The breakpoint has two ends, 5 bp apart across the microhomology: reads
+    running into LILRA3 from the left flank end right-clipped at the first, reads
+    coming back out of it start left-clipped at the second. Both are the bearing
+    chromosome's signal, so both count as clipped.
+
     Returns (clipped, spanning), or None if the query failed.
     """
     require(samtools)
-    chrom, pos = loci.LILRA3_JUNCTION
-    region = f"{chrom}:{max(1, pos - window)}-{pos + window}"
+    chrom, left = loci.LILRA3_JUNCTION
+    right = left + loci.LILRA3_JUNCTION_MICROHOMOLOGY
+    region = f"{chrom}:{max(1, left - window)}-{right + window}"
     cmd = [samtools, "view", "-q", "1"]
     if reference:
         cmd += ["--reference", reference]
@@ -186,29 +208,42 @@ def junction_counts(bam: str, *, reference: str | None = None,
     except Exception:
         return None
 
+    clipped, spanning = tally_junction(out.splitlines(), left, right)
+    if clipped + spanning == 0:
+        return None
+    return clipped, spanning
+
+
+def tally_junction(sam_lines, left: int, right: int) -> tuple[int, int]:
+    """Sort SAM records into breakpoint-clipped and breakpoint-spanning.
+
+    Split out from :func:`junction_counts` so the classification can be tested
+    on SAM text rather than needing a BAM and a samtools.
+    """
     clipped = spanning = 0
-    for line in out.splitlines():
+    for line in sam_lines:
         fields = line.split("\t")
         if len(fields) < 6:
             continue
         start = int(fields[3]) - 1
-        cigar = fields[5]
-        ops = CIGAR.findall(cigar)
+        ops = CIGAR.findall(fields[5])
+        if not ops:
+            continue
         ref_len = sum(int(n) for n, op in ops if op in "MDN=X")
         end = start + ref_len
-        # Soft-clipping within a few bases of the junction is the signal; a clip
-        # elsewhere in the read is ordinary adapter or quality trimming.
-        clip_near = False
-        if ops and ops[0][1] == "S" and abs(start - pos) <= 10:
-            clip_near = True
-        if ops and ops[-1][1] == "S" and abs(end - pos) <= 10:
-            clip_near = True
-        if clip_near:
+        if ref_len < MIN_ANCHOR:
+            continue
+        head, tail = ops[0], ops[-1]
+        # Soft-clipping at the breakpoint is the signal; a clip elsewhere in the
+        # read is ordinary adapter or quality trimming.
+        if (tail[1] == "S" and int(tail[0]) >= MIN_CLIP
+                and abs(end - left) <= JUNCTION_TOLERANCE):
             clipped += 1
-        elif start < pos - 10 and end > pos + 10:
+        elif (head[1] == "S" and int(head[0]) >= MIN_CLIP
+                and abs(start - right) <= JUNCTION_TOLERANCE):
+            clipped += 1
+        elif start < left - MIN_ANCHOR and end > right + MIN_ANCHOR:
             spanning += 1
-    if clipped + spanning == 0:
-        return None
     return clipped, spanning
 
 
@@ -279,6 +314,12 @@ def _call_lilra3(sample: str, bam: str, model: CoverageModel, *,
     junction_estimate = None
     if junction is not None:
         clipped, spanning = junction
+        # Over the 101-donor overlap this reads 0.00 at truth CN 0, a median 1.12
+        # at CN 1 and exactly 2.00 at CN 2 — the 12% at CN 1 is the bearing
+        # chromosome offering two breakpoints' worth of clipped reads against the
+        # deleted one's single spanning window. Left uncorrected: it is well
+        # inside the rounding band, and a fitted fudge factor on a cross-check
+        # would couple it to the route it exists to be independent of.
         junction_estimate = 2.0 * clipped / (clipped + spanning)
         call.support["junction_clipped"] = clipped
         call.support["junction_spanning"] = spanning
@@ -417,6 +458,14 @@ def refine_cohort(calls: list[CNCall]) -> dict:
             out[gene] = {"n": len(estimates), "unit": None,
                          "note": "too few samples to check the scale"}
             continue
+        if not _spans_enough_classes(nonzero):
+            out[gene] = {
+                "n": len(estimates), "unit": None,
+                "median_estimate": round(statistics.median(nonzero), 3),
+                "note": "copy number is too uniform in this cohort to fit a "
+                        "unit; the spacing between classes is what identifies it",
+            }
+            continue
         unit = _fit_unit(nonzero)
         out[gene] = {
             "n": len(estimates),
@@ -430,6 +479,29 @@ def refine_cohort(calls: list[CNCall]) -> dict:
                      "lambda1 is systematically off by that factor"),
         }
     return out
+
+
+# A copy-number class has to carry this many samples before it counts as one of
+# the two the unit fit is measured between.
+MIN_CLASS_SUPPORT = 5
+
+
+def _spans_enough_classes(estimates: list[float]) -> bool:
+    """Whether the cohort has two populated copy-number classes to fit between.
+
+    The unit is the *spacing* between classes, so a cohort sitting on one class
+    does not constrain it: any unit that divides that one value near-integrally
+    fits about as well as any other. LILRB3 in the 101-donor overlap is 99 donors
+    at CN 2 and 2 at CN 1, and the grid duly reported a unit of 0.700 — cost
+    9.817 against 9.973 for the correct 1.03, a 1.6% margin — with the note
+    "lambda1 is systematically off by that factor", on the one gene that scored
+    100% against truth. A diagnostic that cries wolf on a perfect result is worse
+    than no diagnostic, so declining to fit is the honest answer here.
+    """
+    counts: dict[int, int] = {}
+    for e in estimates:
+        counts[round(e)] = counts.get(round(e), 0) + 1
+    return sum(1 for n in counts.values() if n >= MIN_CLASS_SUPPORT) >= 2
 
 
 def _fit_unit(estimates: list[float]) -> float:

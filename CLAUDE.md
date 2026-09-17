@@ -99,6 +99,21 @@ recruitment, arbitration and realignment have each dropped reads.
 - **Relative paths break in pipeline stages**, which run in a scratch cwd.
   Resolve to absolute before handing anything to a tool.
 - **The module-provided samtools on Wynton has no libcurl.** Use the conda env.
+- **Wynton compute nodes have no outbound internet.** A remote CRAM in a job dies
+  with `Destination address required`; the login node is fine, so this is
+  invisible until you submit. `scripts/stage_slices.py` does the one remote pass
+  somewhere that has a route and rewrites the manifest to local slices. Then use
+  `profiles/sge_staged`: `h_rt` picks the queue, and the Snakefile's 2 h default
+  (sized for the remote read) buys nothing but `long.q`.
+- **A shell block runs under `set -euo pipefail`.** `$PYTHONPATH` unset is the
+  normal state on a compute node and fatal under `nounset`; every job in a cohort
+  exited in under a second. Expand with `${PYTHONPATH:+:$PYTHONPATH}`.
+  `tests/test_workflow.py` asserts this.
+- **Killing Snakemake does not kill its jobs.** Orphans kept resubmitting a
+  cached, pre-fix Snakefile while a new run fought them for the same outputs.
+  Drain with `qstat -u $USER | awk 'NR>2{print $1}' | xargs -r qdel` first.
+- **`--config` swallows positional targets.** Put `--jobs N` between them, and
+  make targets absolute or they will not match an absolute `outdir`.
 
 ## Refusal is a feature
 

@@ -23,8 +23,17 @@ See [`PLAN.md`](PLAN.md) for the design and the phase-by-phase build, and
 
 ## Status
 
-Under construction. `PLAN.md` tracks what is done and what is not; nothing here
-should be treated as validated until Phase 8 reports numbers.
+All nine phases are built and the pipeline has been scored against assembly
+truth. On the 101 donors who have both an HPRC assembly and a 1000 Genomes CRAM,
+copy number is **100% correct at LILRB3, 99% at LILRA6 and 95% at LILRA3**
+as-is — and five of the six disagreements are the truth set's rather than the
+pipeline's, each contradicted by an assay that shares no failure mode with the
+one that made the call. `PLAN.md` §9 names every one of them.
+
+Read those numbers with the caveat attached: a donor in that overlap is aligned
+against a panel that contains its own haplotypes, so as-is accuracy is
+optimistic. `validation/README.md` describes the leave-one-donor-out rerun that
+removes the circularity, and reports both.
 
 ## Why srWGS changes the problem
 
@@ -51,7 +60,9 @@ design decision, and the code says so where it matters:
 1. **LILRA3 is not in the GRCh38 primary assembly.** The reference chromosome
    carries the common ~6.7 kb deletion, so LILRA3 is annotated only on LRC alt
    contigs. Depth over LILRA3 means depth over those contigs at MAPQ 0, plus an
-   independent assay at the deletion junction, chr19:54,296,977.
+   independent assay at the deletion junction, chr19:54,297,005 — a coordinate
+   worth measuring rather than inheriting, since the value this project started
+   from was 28 bp off and the assay built on it read zero for every donor alike.
 2. **LILRA6 and LILRB3 are ~97% identical where the reads are.** Only the 3'
    ends are paralogue-unique — 2,900 bp and 1,881 bp. Short reads cannot be
    attributed to one gene in the 5' block, so they are kept for both rather than
@@ -78,7 +89,8 @@ failure surfaces as a bare "fail to open file" that reads like a bad path.
 - Cross-mapping arbitration, the HPRC gene panels and the sequence builder come
   from `lilr-genotyper`.
 - The GRCh38 coordinates, the LILRA3 junction assay and the ALT-awareness
-  diagnostic come from `lilrCN_aou`.
+  diagnostic come from `lilrCN_aou`, all re-measured against the 101-donor
+  overlap before being relied on.
 - The extractor pattern, ratio-to-a-reference-locus copy number with a
   human-overridable threshold file, and the precedent for not competitively
   filtering an inseparable paralogue pair come from

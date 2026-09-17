@@ -23,6 +23,9 @@ resources/locus_index/
 # Sample sheets are cohort-specific
 config/samples.tsv
 config/manifest.tsv
+# A staged manifest points at slices on this machine's scratch, so it is a site
+# artefact rather than a cohort definition. Regenerate with scripts/stage_slices.py.
+config/*.staged.tsv
 
 # Python
 __pycache__/

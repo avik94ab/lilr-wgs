@@ -23,18 +23,47 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 from collections import Counter, defaultdict
 from pathlib import Path
 
 
-def load_truth(path: Path, counted_only: bool) -> dict[tuple[str, str], int]:
-    out = {}
+def load_truth(path: Path, counted_only: bool,
+               ) -> tuple[dict[tuple[str, str], int], dict[tuple[str, str], str]]:
+    out, sources = {}, {}
     with path.open() as fh:
         for row in csv.DictReader(fh, delimiter="\t"):
             if counted_only and row.get("source") == "inferred_absent":
                 continue
-            out[(row["donor"], row["gene"])] = int(row["copies"])
-    return out
+            key = (row["donor"], row["gene"])
+            out[key] = int(row["copies"])
+            sources[key] = row.get("source", "")
+    return out, sources
+
+
+def describe_evidence(support: str) -> str:
+    """The junction counts behind a LILRA3 call, in one line.
+
+    Only the junction, because it is the one piece of evidence that is
+    independent of the depth route the call was made on — a depth number
+    restated does not help adjudicate a depth number.
+    """
+    if not support:
+        return ""
+    try:
+        data = json.loads(support)
+    except (ValueError, TypeError):
+        return ""
+    if "junction_clipped" not in data:
+        return ""
+    clipped, spanning = data["junction_clipped"], data.get("junction_spanning", 0)
+    # spanning counts the deleted chromosome. Zero of them is the assertion that
+    # there is no deleted chromosome, which is a copy number of 2 whatever the
+    # panel says.
+    reading = ("no deleted allele" if spanning == 0 else
+               "no intact allele" if clipped == 0 else "heterozygous")
+    return (f"junction: {clipped} clipped / {spanning} spanning "
+            f"-> {data.get('junction_estimate')} copies ({reading})")
 
 
 def load_calls(path: Path) -> dict[tuple[str, str], dict]:
@@ -58,11 +87,12 @@ def main() -> int:
     p.add_argument("-o", "--output", type=Path)
     args = p.parse_args()
 
-    truth = load_truth(args.truth, args.counted_only)
+    truth, sources = load_truth(args.truth, args.counted_only)
     calls = load_calls(args.calls)
 
     per_gene: dict[str, Counter] = defaultdict(Counter)
     confusion: dict[str, Counter] = defaultdict(Counter)
+    disagreements: list[dict] = []
     for key, row in calls.items():
         if key not in truth:
             continue
@@ -78,6 +108,14 @@ def main() -> int:
         per_gene[gene][f"{bucket}_n"] += 1
         if called == expected:
             per_gene[gene][f"{bucket}_correct"] += 1
+        else:
+            disagreements.append({
+                "sample": key[0], "gene": gene, "truth": expected,
+                "source": sources.get(key, "counted"), "called": called,
+                "estimate": row.get("estimate", ""),
+                "confidence": row.get("confidence", ""), "flagged": flagged,
+                "evidence": describe_evidence(row.get("support", "")),
+            })
         confusion[gene][(expected, called)] += 1
 
     lines = []
@@ -112,6 +150,24 @@ def main() -> int:
         if wrong:
             detail = ", ".join(f"{t}->{c}: {n}" for (t, c), n in sorted(wrong.items()))
             lines.append(f"  {gene}: {detail}")
+
+    # Every disagreement, named, with the evidence it was called on. A count of
+    # mismatches says the pipeline and the truth set differ; it does not say
+    # which one is wrong, and at LILRA3 the answer has been "the truth set" more
+    # often than not. The junction assay shares no failure mode with the depth
+    # route, so where the two agree against the panel, that is worth seeing
+    # without going back to the per-sample files.
+    if disagreements:
+        lines.append("")
+        lines.append("each disagreement, with the evidence:")
+        for d in sorted(disagreements, key=lambda d: (d["gene"], d["sample"])):
+            lines.append(
+                f"  {d['sample']:10s} {d['gene']:8s} "
+                f"truth={d['truth']} ({d['source']})  called={d['called']}  "
+                f"est={d['estimate']}  confidence={d['confidence']}"
+                f"{'  [flagged]' if d['flagged'] else ''}")
+            if d["evidence"]:
+                lines.append(f"{'':14s}{d['evidence']}")
 
     skipped = {g: {k: v for k, v in c.items() if k.startswith("not_scored")}
                for g, c in per_gene.items()}

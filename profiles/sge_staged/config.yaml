@@ -1,0 +1,53 @@
+# Wynton SGE, for a cohort whose slices are already staged on local disk.
+#
+#   python3 scripts/stage_slices.py ...          # on a host with internet
+#   snakemake -s workflow/Snakefile --profile profiles/sge_staged \
+#       --config manifest=config/manifest.hprc.staged.tsv
+#
+# Same as profiles/sge but with the wall-clock requests cut to fit `short.q`.
+# Two site facts make this the profile to use whenever slicing has already
+# happened, and they are worth stating because neither is guessable:
+#
+#   * Wynton's compute nodes have no outbound route. A remote CRAM there fails
+#     with "Destination address required", so the one remote pass cannot run in
+#     a job at all — hence scripts/stage_slices.py.
+#   * h_rt decides the queue. `short.q` caps at 00:30:00 and had ~5,200 free
+#     slots when this was written; `long.q` takes anything longer and had ~550.
+#     The 02:00:00 default in the Snakefile is sized for the remote read, so on
+#     staged slices it buys nothing and costs the faster queue: a single
+#     8-slot build_indices job sat in `long.q` for 11 minutes without starting.
+#
+# With the slice already local, process_sample is pure compute and took 356 s on
+# one sample, so 25 minutes is about four times the headroom it needs. If a job
+# is ever killed at the limit, move to profiles/sge rather than raising this —
+# above 30 minutes the request leaves short.q anyway and the shorter value stops
+# meaning anything.
+executor: cluster-generic
+cluster-generic-submit-cmd: >-
+  qsub -V -cwd -S /bin/bash
+  -l h_rt={resources.h_rt}
+  -l mem_free={resources.mem_free}
+  -pe smp {threads}
+  -o logs/ -e logs/
+  -N lilrwgs.{rule}
+
+jobs: 40
+latency-wait: 120          # BeeGFS metadata lag; a shorter wait reports phantom missing outputs
+keep-going: true
+rerun-incomplete: true
+printshellcmds: true
+retries: 3
+
+set-resources:
+  process_sample:
+    h_rt: "00:25:00"
+  build_indices:
+    h_rt: "00:25:00"
+  cohort_scale:
+    h_rt: "00:25:00"
+  coverage_cohort:
+    h_rt: "00:25:00"
+
+default-resources:
+  - h_rt="00:25:00"
+  - mem_free="4G"

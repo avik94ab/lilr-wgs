@@ -17,6 +17,7 @@
 # ======================================================================
 import csv
 import os
+import sys
 
 configfile: os.path.join(workflow.basedir, "..", "config", "config.yaml")
 
@@ -38,11 +39,43 @@ with open(_p(config["manifest"])) as _fh:
 SAMPLES = sorted(MANIFEST)
 
 REFERENCE = _p(config["reference"])
-PANEL_DIR = _p(config["gdna_panels"])
-PANEL_IDX = _p(config["panel_index"])
 LOCUS_REFS = _p(config["locus_refs"])
 LOCUS_IDX = _p(config["locus_index"])
 EXON_DIR = _p(config["exon_coords"])
+
+# `gdna_panels` and `panel_index` may carry a `{sample}` placeholder, which makes
+# recruitment use a panel built for that one sample. Only validation needs it —
+# leave-one-donor-out has to align a donor against a panel its own haplotypes
+# have been removed from, or the accuracy it reports is partly a memory test. The
+# placeholder survives into the rules as a Snakemake wildcard, so `build_indices`
+# becomes a per-donor rule for free when it is present, and stays a single global
+# one when it is not.
+PANEL_DIR = _p(config["gdna_panels"])
+PANEL_IDX = _p(config["panel_index"])
+PER_DONOR_PANELS = "{sample}" in PANEL_IDX
+
+
+def panel_index(sample):
+    return PANEL_IDX.format(sample=sample) if PER_DONOR_PANELS else PANEL_IDX
+
+
+def panel_dir(sample):
+    return PANEL_DIR.format(sample=sample) if "{sample}" in PANEL_DIR else PANEL_DIR
+
+
+if PER_DONOR_PANELS:
+    # Said once here rather than discovered 101 times in a row: a per-donor run
+    # builds panels only, so the shared calling index has to exist already.
+    _missing = [g for g in GENES
+                if not os.path.exists(os.path.join(LOCUS_IDX, f"{g}.1.bt2"))]
+    if _missing:
+        sys.exit(
+            f"per-donor panels are configured, which builds recruitment panels "
+            f"only, but {LOCUS_IDX} has no locus index for: "
+            f"{', '.join(_missing)}.\nBuild the shared indices once first:\n"
+            f"  bash scripts/build_indices.sh resources/gdna resources/gdna_index "
+            f"{LOCUS_REFS} {LOCUS_IDX} 8\n"
+        )
 
 PRELUDE = config.get("prelude", "")
 if PRELUDE and not PRELUDE.rstrip().endswith(";"):
@@ -50,7 +83,14 @@ if PRELUDE and not PRELUDE.rstrip().endswith(";"):
 
 # PYTHONPATH rather than an install step, so a clone runs without `pip install -e`
 # and the code that runs is unambiguously the code in the working tree.
-PYENV = f"export PYTHONPATH={SRC}:$PYTHONPATH; "
+#
+# The `:+` is load-bearing. Snakemake prefixes every shell block with
+# `set -euo pipefail`, and under `nounset` a bare `$PYTHONPATH` is an error when
+# the variable is unset — which is its normal state on a fresh compute node,
+# though not in the interactive shell where this gets tested. Every one of 101
+# jobs died in under a second with "PYTHONPATH: unbound variable", buried in the
+# job's stderr under a Snakemake traceback that pointed at the rule.
+PYENV = f'export PYTHONPATH="{SRC}${{PYTHONPATH:+:$PYTHONPATH}}"; '
 
 SHARED_GROUPS = config.get("shared_groups", [["LILRA6", "LILRB3"],
                                              ["LILRB1", "LILRB4"]])
@@ -73,15 +113,23 @@ rule build_indices:
     Built rather than shipped: the panel indices are 29 MB of binary blobs that
     git has no business storing when the FASTAs they derive from are already
     here.
+
+    With per-donor panels this rule carries a `{sample}` wildcard and runs once
+    per donor, building panels only — the per-locus calling references do not
+    depend on the donor, and 101 jobs racing to build one shared index is a way
+    to get a half-written one.
     """
     input:
-        panels=expand(os.path.join(PANEL_DIR, "{gene}.fasta"), gene=GENES),
+        panels=expand(os.path.join(PANEL_DIR, "{gene}.fasta"),
+                      gene=GENES, allow_missing=True),
         refs=expand(os.path.join(LOCUS_REFS, "{gene}_named.fa"), gene=GENES),
     output:
         marker=os.path.join(PANEL_IDX, ".indices_built"),
     params:
-        prelude=PRELUDE, panel_idx=PANEL_IDX, locus_idx=LOCUS_IDX,
-        panel_dir=PANEL_DIR, locus_refs=LOCUS_REFS,
+        prelude=PRELUDE, locus_idx=LOCUS_IDX, locus_refs=LOCUS_REFS,
+        panel_idx=lambda w: panel_index(getattr(w, "sample", None)),
+        panel_dir=lambda w: panel_dir(getattr(w, "sample", None)),
+        which="panels" if PER_DONOR_PANELS else "all",
     threads: 8
     resources:
         h_rt="02:00:00", mem_free="8G",
@@ -90,7 +138,7 @@ rule build_indices:
         {params.prelude}
         bash {REPO}/scripts/build_indices.sh \
             {params.panel_dir} {params.panel_idx} \
-            {params.locus_refs} {params.locus_idx} {threads}
+            {params.locus_refs} {params.locus_idx} {threads} {params.which}
         touch {output.marker}
         """
 
@@ -108,7 +156,7 @@ rule process_sample:
     the cluster idle. Do not split it back out.
     """
     input:
-        indices=os.path.join(PANEL_IDX, ".indices_built"),
+        indices=lambda w: os.path.join(panel_index(w.sample), ".indices_built"),
         reference=REFERENCE,
     output:
         coverage=os.path.join(OUT, "coverage", "{sample}.json"),
@@ -120,7 +168,7 @@ rule process_sample:
     params:
         prelude=PRELUDE, pyenv=PYENV,
         cram=lambda w: MANIFEST[w.sample]["cram"],
-        out=OUT, panel_idx=PANEL_IDX,
+        out=OUT, panel_idx=lambda w: panel_index(w.sample),
         locus_idx=LOCUS_IDX, locus_refs=LOCUS_REFS,
         buffer=config.get("score_buffer", 2),
         groups=" ".join(",".join(g) for g in SHARED_GROUPS),

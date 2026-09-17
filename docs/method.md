@@ -159,14 +159,44 @@ carries the common ~6.7 kb deletion. Read twice:
 - *depth* over the four alt contigs carrying it, at MAPQ 0 (those reads multi-map
   four ways by construction, so the MAPQ floor is deliberately dropped), summed
   and divided by **one** interval's length rather than four;
-- *the junction* at chr19:54,296,977, where a LILRA3-bearing chromosome's reads
+- *the junction* at chr19:54,297,005, where a LILRA3-bearing chromosome's reads
   soft-clip and a deleted one's cross cleanly. `clipped/(clipped+spanning)`
   estimates half the copy number.
 
+That coordinate is measured, not inherited. The value this project started from,
+chr19:54,296,977, is 28 bp left of where reads actually clip, so the ±10 bp
+window around it saw nothing at all: `clipped` came back 0–4 for every donor
+irrespective of copy number, the assay contributed nothing, and — because the
+depth route then disagreed with it by construction — every LILRA3-bearing donor
+picked up a spurious "treat this call as unresolved" note. The breakpoint has two
+ends 5 bp apart, the microhomology of the Alu it sits in: reads running into
+LILRA3 from the left flank end right-clipped at 54,297,005, and reads coming back
+out of it start left-clipped at 54,297,010. What identifies these as LILRA3 and
+not some local indel is that their `SA` tags land inside the alt-contig intervals
+the depth route measures.
+
 The two share no failure mode — depth dies if the CRAM's reference lacks the alt
 contigs, the junction is weakened if the aligner had them and moved the clipped
-reads there — so they are both reported and their disagreement is a field.
-HG00096: depth 0.064 copies, junction 0 of 19 reads clipped. Both say CN 0.
+reads there — so they are both reported and their disagreement is a field. Over
+the 101-donor overlap the junction reads:
+
+| donor | truth | clipped | spanning | junction | depth |
+|---|---|---|---|---|---|
+| NA18608 | 0 | 0 | 30 | 0.00 | 0.002 |
+| HG00253 | 1 | 21 | 17 | 1.11 | 0.962 |
+| HG00099 | 2 | 53 | 0 | 2.00 | 2.047 |
+
+`spanning` is 0 in 65/65 donors of truth CN 2 — a deleted chromosome is the only
+thing that can produce a read crossing that base, so none of them has one — and
+`clipped` is ≤ 1 in 13 of the 16 of truth CN 0. The other three are the interesting
+ones: they are all `inferred_absent` truth entries, and the junction says they are
+heterozygous carriers. See `validation/README.md`.
+
+At CN 1 the junction reads a median 1.12 rather than 1.00, because the bearing
+chromosome offers two breakpoints' worth of clipped reads against the deleted
+one's single spanning window. That is inside the rounding band and is left
+uncorrected: a fitted factor on a cross-check would couple it to the route it
+exists to be independent of.
 
 **The pair check.** LILRA6 is also obtainable as pooled LILRA6+LILRB3 depth at
 MAPQ 0 minus LILRB3 from its unique window. Reads from both genes multi-map
@@ -177,7 +207,13 @@ from the unique window.
 
 Copy number is **absolute and per-sample**. `refine_cohort()` checks whether the
 cohort's estimates cluster on a unit of 1.0 and reports a systematic offset
-rather than dividing it out, so nothing downstream depends on a cohort fit.
+rather than dividing it out, so nothing downstream depends on a cohort fit. It
+declines to fit at all unless two copy-number classes each carry at least five
+samples: the unit is a *spacing*, so a cohort sitting on one class does not
+constrain it. LILRB3 over the 101-donor overlap is 99 donors at CN 2 and 2 at
+CN 1, and the unconstrained fit duly reported a unit of 0.700 — "λ₁ is
+systematically off by that factor" — on the one gene that scored 100% against
+truth. On the same cohort LILRA6 fits 1.015 and LILRA3 0.977.
 
 ## 6. Was the alignment ALT-aware?
 

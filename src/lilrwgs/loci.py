@@ -127,12 +127,24 @@ LILRA3_SPAN = 6_758
 # cleanly and a LILRA3-bearing one's soft-clip there. clipped/(clipped+spanning)
 # estimates half the copy number — an assay with no failure mode in common with
 # the depth route.
-LILRA3_JUNCTION = (CHROM, 54_296_977)
+#
+# Measured here rather than inherited. The value carried over from ``lilrCN_aou``,
+# 54,296,977, is 28 bp left of where reads actually clip, so the ±10 bp window
+# around it saw nothing and the assay returned ~0 for every donor regardless of
+# copy number. Over the 101-donor HPRC overlap the clip pile-up sits at
+# 54,297,005 for reads ending right-clipped and 54,297,010 for reads starting
+# left-clipped — 5 bp of microhomology at the Alu the breakpoint sits in. The
+# clipped reads' SA tags land inside LILRA3_ALT, which is what says these are the
+# LILRA3-bearing chromosome rather than an unrelated indel. With the corrected
+# base, `spanning` is 0 in 65/65 donors of truth CN 2 and `clipped` ≤ 1 in 13/16
+# of truth CN 0; with the old one, `clipped` was 0–4 irrespective of truth.
+LILRA3_JUNCTION = (CHROM, 54_297_005)
+LILRA3_JUNCTION_MICROHOMOLOGY = 5
 
 # ~980 bp of LILRA3's 3' end survives the deletion and sits on primary just left
 # of the junction, at two copies in everyone. A QC probe, not a target: if it
 # does not read flat near 1.0, the region is not being sampled as assumed.
-LILRA3_RETAINED = [(CHROM, 54_295_997, 54_296_977)]
+LILRA3_RETAINED = [(CHROM, 54_296_025, 54_297_005)]
 
 # ---------------------------------------------------------------------------
 # Paralogue-unique windows

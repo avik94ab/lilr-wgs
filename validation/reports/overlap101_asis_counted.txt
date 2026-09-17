@@ -1,0 +1,17 @@
+copy-number accuracy vs HPRC truth — AS-IS (donor's own haplotypes are in the panel; this overstates accuracy)
+
+gene         n    confident      flagged   overall
+LILRA3      85  83/84 98.8%     0/1 0.0%     97.6%
+LILRA6     101 87/87 100.0%  13/14 92.9%     99.0%
+LILRB3     101 83/83 100.0% 18/18 100.0%    100.0%
+
+confusion (truth -> called), where they differ:
+  LILRA3: 1->2: 2
+  LILRA6: 5->6: 1
+
+each disagreement, with the evidence:
+  NA18945    LILRA3   truth=1 (counted)  called=2  est=2.236  confidence=0.528  [flagged]
+              junction: 44 clipped / 0 spanning -> 2.0 copies (no deleted allele)
+  NA21093    LILRA3   truth=1 (counted)  called=2  est=2.027  confidence=0.945
+              junction: 57 clipped / 0 spanning -> 2.0 copies (no deleted allele)
+  NA20827    LILRA6   truth=5 (counted)  called=6  est=5.539  confidence=0.079  [flagged]

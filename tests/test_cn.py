@@ -18,6 +18,7 @@ from lilrwgs.cn import (
     _call_unique_window,
     integerise,
     refine_cohort,
+    tally_junction,
 )
 from lilrwgs.coverage import CoverageModel
 
@@ -204,3 +205,129 @@ class TestDepthCommand:
         cmd = self._command(monkeypatch, supplementary=True)
         assert "-G" not in cmd
         assert cmd[1] == "depth"
+
+
+class TestJunctionTally:
+    """The LILRA3 deletion breakpoint.
+
+    This assay silently measured nothing for the whole of the pilot. The recorded
+    junction base was 28 bp left of where reads actually clip, so `clipped` came
+    back 0–4 whatever the donor's copy number was, `LILRA3` was called from depth
+    alone, and — because the two routes then disagreed by construction — every
+    LILRA3-bearing donor picked up a "treat this call as unresolved" note. The
+    numbers below are from the 101-donor HPRC overlap at the corrected base.
+    """
+
+    LEFT = 54_297_005
+    RIGHT = LEFT + 5          # the microhomology's far end
+
+    def sam(self, pos: int, cigar: str) -> str:
+        """A minimal SAM record; only POS and CIGAR are read."""
+        return f"r\t0\tchr19\t{pos}\t60\t{cigar}\t*\t0\t0\t*\t*"
+
+    def test_read_ending_clipped_at_the_breakpoint_counts_as_clipped(self):
+        # 100 aligned bases arriving at LEFT, then clipped into LILRA3.
+        lines = [self.sam(self.LEFT - 100 + 1, "100M50S")]
+        assert tally_junction(lines, self.LEFT, self.RIGHT) == (1, 0)
+
+    def test_read_starting_clipped_at_the_breakpoint_counts_as_clipped(self):
+        # Coming back out of LILRA3 onto the right flank.
+        lines = [self.sam(self.RIGHT + 1, "50S100M")]
+        assert tally_junction(lines, self.LEFT, self.RIGHT) == (1, 0)
+
+    def test_read_crossing_cleanly_counts_as_spanning(self):
+        lines = [self.sam(self.LEFT - 75 + 1, "150M")]
+        assert tally_junction(lines, self.LEFT, self.RIGHT) == (0, 1)
+
+    def test_the_old_junction_base_is_not_where_reads_clip(self):
+        """The regression itself: a clip at the old base is not the signal.
+
+        Reads clipping 28 bp away are ordinary alignment noise, and counting them
+        is what made the assay look alive while measuring nothing.
+        """
+        old = 54_296_977
+        lines = [self.sam(old - 100 + 1, "100M50S")]
+        assert tally_junction(lines, self.LEFT, self.RIGHT) == (0, 0)
+
+    def test_short_clips_are_not_the_signal(self):
+        """Two or three trimmed bases are adapter, not a breakpoint."""
+        lines = [self.sam(self.LEFT - 100 + 1, "100M4S")]
+        clipped, _ = tally_junction(lines, self.LEFT, self.RIGHT)
+        assert clipped == 0
+
+    def test_a_clipped_read_is_not_also_counted_as_spanning(self):
+        """The classes have to partition, or the ratio stops being a fraction."""
+        lines = [self.sam(self.LEFT - 100 + 1, "100M50S")] * 3
+        clipped, spanning = tally_junction(lines, self.LEFT, self.RIGHT)
+        assert (clipped, spanning) == (3, 0)
+
+    def test_deleted_homozygote_shape(self):
+        """Truth CN 0: reads cross, none clip. Estimate 0.0."""
+        lines = [self.sam(self.LEFT - 75 + 1, "150M")] * 30
+        clipped, spanning = tally_junction(lines, self.LEFT, self.RIGHT)
+        assert clipped == 0
+        assert 2.0 * clipped / (clipped + spanning) == 0.0
+
+    def test_bearing_homozygote_shape(self):
+        """Truth CN 2: nothing crosses. Measured in 65/65 donors of the overlap."""
+        lines = ([self.sam(self.LEFT - 100 + 1, "100M50S")] * 38
+                 + [self.sam(self.RIGHT + 1, "50S100M")] * 19)
+        clipped, spanning = tally_junction(lines, self.LEFT, self.RIGHT)
+        assert spanning == 0
+        assert 2.0 * clipped / (clipped + spanning) == 2.0
+
+    def test_heterozygote_rounds_to_one(self):
+        """Truth CN 1 reads a median 1.12 over the overlap — inside the band.
+
+        The 12% excess is the bearing chromosome offering two breakpoints' worth
+        of clipped reads against the deleted one's single spanning window.
+        """
+        lines = ([self.sam(self.LEFT - 100 + 1, "100M50S")] * 14
+                 + [self.sam(self.RIGHT + 1, "50S100M")] * 8
+                 + [self.sam(self.LEFT - 75 + 1, "150M")] * 18)
+        clipped, spanning = tally_junction(lines, self.LEFT, self.RIGHT)
+        assert (clipped, spanning) == (22, 18)     # HG00253, measured
+        assert integerise(2.0 * clipped / (clipped + spanning), "LILRA3")[0] == 1
+
+
+class TestUnitFitDeclinesWhenUnconstrained:
+    """The unit is a spacing, so one copy-number class does not constrain it.
+
+    LILRB3 over the 101-donor overlap is 99 donors at CN 2 and 2 at CN 1. The
+    grid fitted 0.700 and reported lambda1 as "systematically off by that
+    factor" — on the gene that scored 100% against truth.
+    """
+
+    def _calls(self, gene: str, estimates: list[float]) -> list[CNCall]:
+        out = []
+        for i, e in enumerate(estimates):
+            c = CNCall(sample=f"S{i}", gene=gene, status="measured", estimate=e)
+            c.copies, c.confidence = integerise(e, gene)
+            out.append(c)
+        return out
+
+    def test_a_uniform_cohort_gets_no_unit(self):
+        estimates = [2.06] * 99 + [1.03, 1.05]
+        result = refine_cohort(self._calls("LILRB3", estimates))
+        assert result["LILRB3"]["unit"] is None
+        assert "too uniform" in result["LILRB3"]["note"]
+
+    def test_a_uniform_cohort_still_reports_its_median(self):
+        """Declining to fit is not declining to report. The median is what says
+        the scale is fine, and it is the number a human would look at next."""
+        result = refine_cohort(self._calls("LILRB3", [2.06] * 99 + [1.03, 1.05]))
+        assert result["LILRB3"]["median_estimate"] == 2.06
+
+    def test_two_populated_classes_are_enough_to_fit(self):
+        """LILRA3 in the same cohort: 21 donors at CN 1, 67 at CN 2. It fits."""
+        estimates = [1.02] * 21 + [1.98] * 67
+        result = refine_cohort(self._calls("LILRA3", estimates))
+        assert result["LILRA3"]["unit"] is not None
+        assert abs(result["LILRA3"]["unit"] - 1.0) < 0.08
+
+    def test_a_real_offset_is_still_caught(self):
+        """The check must keep working where it is meaningful."""
+        estimates = [e * 1.2 for e in [1.0] * 20 + [2.0] * 40 + [3.0] * 20]
+        result = refine_cohort(self._calls("LILRA6", estimates))
+        assert result["LILRA6"]["unit"] is not None
+        assert "systematically off" in result["LILRA6"]["note"]
