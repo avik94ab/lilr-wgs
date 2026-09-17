@@ -1,0 +1,6 @@
+sample_id	cram	crai	population
+HG00099	https://ftp.sra.ebi.ac.uk/vol1/run/ERR324/ERR3240116/HG00099.final.cram	https://ftp.sra.ebi.ac.uk/vol1/run/ERR324/ERR3240116/HG00099.final.cram.crai	GBR
+HG00140	https://ftp.sra.ebi.ac.uk/vol1/run/ERR324/ERR3240146/HG00140.final.cram	https://ftp.sra.ebi.ac.uk/vol1/run/ERR324/ERR3240146/HG00140.final.cram.crai	GBR
+HG02155	https://ftp.sra.ebi.ac.uk/vol1/run/ERR324/ERR3242169/HG02155.final.cram	https://ftp.sra.ebi.ac.uk/vol1/run/ERR324/ERR3242169/HG02155.final.cram.crai	CDX
+HG02922	https://ftp.sra.ebi.ac.uk/vol1/run/ERR324/ERR3242482/HG02922.final.cram	https://ftp.sra.ebi.ac.uk/vol1/run/ERR324/ERR3242482/HG02922.final.cram.crai	ESN
+NA18608	https://ftp.sra.ebi.ac.uk/vol1/run/ERR323/ERR3239379/NA18608.final.cram	https://ftp.sra.ebi.ac.uk/vol1/run/ERR323/ERR3239379/NA18608.final.cram.crai	CHB

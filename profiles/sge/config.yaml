@@ -1,0 +1,28 @@
+# Wynton SGE profile.
+#
+#   snakemake -s workflow/Snakefile --profile profiles/sge
+#
+# Jobs are dispatched with qsub through the cluster-generic plugin. The resource
+# names (h_rt, mem_free) are SGE's own and are set per rule in the Snakefile.
+executor: cluster-generic
+cluster-generic-submit-cmd: >-
+  qsub -V -cwd -S /bin/bash
+  -l h_rt={resources.h_rt}
+  -l mem_free={resources.mem_free}
+  -pe smp {threads}
+  -o logs/ -e logs/
+  -N lilrwgs.{rule}
+
+jobs: 200
+latency-wait: 120          # BeeGFS metadata lag; a shorter wait reports phantom missing outputs
+keep-going: true
+rerun-incomplete: true
+printshellcmds: true
+
+# Scavenger queues preempt. A retried job is cheap here because every stage is
+# idempotent and resumes from files that already exist.
+retries: 3
+
+default-resources:
+  - h_rt="01:00:00"
+  - mem_free="4G"

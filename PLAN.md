@@ -135,29 +135,29 @@ scripts were positional-argument CLIs with no tests; this is the main structural
 
 Each phase ends with something that runs and something that is checked.
 
-- [ ] **Phase 0 — skeleton.** Repo, plan, env spec, `.gitignore`, GitHub remote. Probe the
-      Wynton toolchain (samtools with libcurl for remote CRAM, GATK, bowtie2, whatshap) and
-      record what is actually available.
-- [ ] **Phase 1 — resources and manifest.** `lilrwgs.loci` from the derived GRCh38
-      coordinates. GRCh38 reference fetch script. Panel indices built, not shipped. Manifest
-      builder turning the 1KGP sequence index into `sample_id → CRAM URL`.
-- [ ] **Phase 2 — extraction.** CRAM → LRC read pairs → FASTQ, local path or EBI HTTPS.
-      Verified end to end on HG00096/HG00097.
-- [ ] **Phase 3 — the depth model.** ★ `lilrwgs.coverage` and `lilrwgs.depth_model`: λ₁,
-      GC correction, dispersion, two-sided callability, the ALT-aware verdict. Unit tests
-      against simulated depth where the answer is known.
-- [ ] **Phase 4 — copy number.** Depth windows + LILRA3 junction + k-mer presence, combined
-      into a per-sample integer call with an explicit confidence and an override file.
-      Checked against HPRC truth (§6).
-- [ ] **Phase 5 — per-gene assignment.** Panel alignment + ported cross-map arbitration,
-      with the WGS-appropriate duplicate handling.
-- [ ] **Phase 6 — genotyping.** HaplotypeCaller at ploidy = CN, depth-model filtering,
-      phasing, consensus against the callability track, CDS/cDNA/protein.
-- [ ] **Phase 7 — orchestration.** Snakemake DAG, SGE profile, resumability, the fused
-      per-sample job pattern that the predecessor learned the hard way.
-- [ ] **Phase 8 — validation.** The 101-sample HPRC comparison, CN and sequence, reported.
-- [ ] **Phase 9 — documentation.** README, `CLAUDE.md`, method notes stating which claims
-      rest on measurement and which on assumption.
+- [x] **Phase 0 — skeleton.** Repo, plan, env spec, GitHub remote. Toolchain probed: the
+      Wynton module samtools is built **without libcurl** and cannot read remote CRAM, so the
+      conda environment is mandatory rather than convenient. GATK 4.2.6.0 pinned as before.
+- [x] **Phase 1 — resources and manifest.** `lilrwgs.loci`, with gene bodies re-verified
+      against UCSC `ncbiRefSeqCurated` (they agree with the derived windows to the base).
+      Reference fetch, index build, and a manifest builder over the 1KGP sequence index.
+- [x] **Phase 2 — extraction.** `slice_cram` + `to_fastq`. HG00096's LRC slice from EBI:
+      151,802 reads in 21 s, whole sample in 267 s. Streaming 2,504 samples is feasible
+      without staging — open question 1 answered.
+- [x] **Phase 3 — the depth model.** λ₁, dispersion, GC correction, two-sided callability,
+      the ALT-aware verdict, and the recruitment-efficiency correction the pilot forced.
+- [x] **Phase 4 — copy number.** Unique windows + LILRA3 junction + the pair check, all
+      per-sample and absolute. k-mer presence not implemented — the junction assay already
+      gives LILRA3 a second, independent route, so it was not needed.
+- [x] **Phase 5 — per-gene assignment.** Ported arbitration plus the shared-pair table that
+      carries the shared-block verdict across the FASTQ hop.
+- [x] **Phase 6 — genotyping.** HaplotypeCaller at ploidy = CN restricted to the callable
+      track, phasing, consensus masked by the same track, CDS/cDNA/protein.
+- [x] **Phase 7 — orchestration.** Snakemake DAG with no cohort barrier, SGE and local
+      profiles, the fused per-sample rule.
+- [ ] **Phase 8 — validation.** Truth set built (232 donors, 101 in 1KGP). Scoring across
+      the overlap, as-is and leave-one-donor-out, is the remaining work.
+- [x] **Phase 9 — documentation.** README, `CLAUDE.md`, `docs/method.md`.
 
 ---
 
@@ -212,3 +212,40 @@ Flagged rather than guessed; each is answered by a measurement in the phase note
    unknown. (Phase 6/8.)
 4. **Are the NYGC CRAMs ALT-aware in practice?** The functional-equivalence spec says yes;
    the tool measures it per sample rather than trusting it. (Phase 3.)
+
+---
+
+## 8. What the pilot established
+
+Measured, not assumed. Each of these changed the code.
+
+**The NYGC alignment is ALT-aware.** HG00096: `q20_lrc` 0.996, `q20_outside` 0.999,
+dilution 0.930. So the MAPQ-20 windows at LILRA6 and LILRB3 mean what they should. This was
+open question 4, and it was worth measuring rather than trusting the functional-equivalence
+spec — the `.alt` file's presence is not recorded in the CRAM header.
+
+**Streaming is viable.** 151,802 reads over the LRC in 21 s from EBI; a whole sample in
+267 s including the coverage model, copy number and recruitment. No staging needed.
+
+**Three bugs, all of which produced believable output rather than errors.** This is the
+pattern worth naming: in this region, a wrong answer looks like a biological finding.
+
+1. `samtools view` with several regions emits a read once *per region it overlaps*. Three
+   control loci sit inside the LRC slice, so their depth doubled, λ₁ came out at 36.8 for a
+   30× library, and every copy number halved — a cohort of LILRA6 hemizygotes, which nothing
+   downstream would have questioned.
+2. The pair check was missing its span weight, so every 2+2 sample implied zero LILRA6
+   copies. With the weight, the pooled route gives 1.98 against 2.00 from the unique window.
+3. λ₁ is measured on the CRAM slice but applied to a realigned per-gene BAM. The two are in
+   different units by 19%, and applied uncorrected that put 27% of LILRB1 below a floor it
+   should have cleared — the predecessor's failure mode arriving by a different route.
+
+**Callability at 30×.** Separable genes 95.6–96.9%; LILRB1 80.1%; LILRA6 78.5%; LILRB3
+75.6%. The loss at the paralogues is concentrated in MAPQ and paralogue ambiguity rather
+than depth, which is where the sequence says it should be. Open question 3 is partly
+answered for depth, and not at all for haplotype *sequence* accuracy.
+
+**The truth set is richer than expected.** 232 donors, 101 with a 1KGP CRAM, LILRA6 spanning
+CN 0–6 and LILRA3 CN 0–2 at a 24% deletion allele frequency. It also confirmed, rather than
+assumed, that LILRA1/LILRA2/LILRB2/LILRB5 are copy-stable at 2 in 231 of 232 donors — which
+is what justifies using them as the recruitment-efficiency anchors.

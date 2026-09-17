@@ -1,0 +1,10 @@
+# Local execution on one machine.
+#   snakemake -s workflow/Snakefile --profile profiles/local
+jobs: 8
+latency-wait: 15
+keep-going: true
+rerun-incomplete: true
+printshellcmds: true
+default-resources:
+  - h_rt="01:00:00"
+  - mem_free="4G"
