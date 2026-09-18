@@ -128,7 +128,8 @@ def read_inputs(path: Path) -> list[dict]:
     return rows
 
 
-def genes_for(target_assembly: str) -> tuple[str, ...]:
+def genes_for(target_assembly: str, requested: str | None = None,
+              ) -> tuple[str, ...]:
     """Which genes this target can report.
 
     Used for the failure path as well as the success one, so a sample that dies
@@ -137,12 +138,22 @@ def genes_for(target_assembly: str) -> tuple[str, ...]:
     """
     mod = realign.LOCI_BY_ASSEMBLY.get(target_assembly)
     windows = getattr(mod, "UNIQUE_WINDOWS", {}) if mod else {}
-    return ("LILRA6", "LILRA3") if "LILRA3" in windows else ("LILRA6",)
+    available = ("LILRA6", "LILRA3") if "LILRA3" in windows else ("LILRA6",)
+    if requested is None:
+        return available
+    asked = tuple(g.strip().upper() for g in requested.split(",") if g.strip())
+    missing = [g for g in asked if g not in available]
+    if missing:
+        raise SystemExit(
+            f"{target_assembly} cannot report {', '.join(missing)}; "
+            f"it has windows for {', '.join(available)}")
+    return asked
 
 
 def call_one(row: dict, reference: str, bwa_index: str, outdir: Path,
              threads: int, keep_bam: bool, target_assembly: str = "GRCh38",
-             target: str | None = None) -> dict:
+             target: str | None = None,
+             genes: tuple[str, ...] = ("LILRA6",)) -> dict:
     """One sample, end to end. Returns a status dict; never raises.
 
     Never raises because a cohort is a list of independent samples and one
@@ -177,14 +188,16 @@ def call_one(row: dict, reference: str, bwa_index: str, outdir: Path,
         target_loci = realign.LOCI_BY_ASSEMBLY[target_assembly]
         model = coverage.measure(sample, str(bam), reference=target or bwa_index,
                                  loci_mod=target_loci)
-        calls = [cn.call_lilra6(sample, str(bam), model,
-                                reference=target or bwa_index,
-                                loci_mod=target_loci)]
+        calls = []
+        if "LILRA6" in genes:
+            calls.append(cn.call_lilra6(sample, str(bam), model,
+                                        reference=target or bwa_index,
+                                        loci_mod=target_loci))
         # LILRA3 only where the assembly carries it. On GRCh38 this returns
         # `not_measured` with a reason rather than a number, because the routes
         # that do work there -- alt-contig depth, the deletion junction -- need
         # the CRAM slice, not a realigned regional extraction.
-        if "LILRA3" in genes_for(target_assembly):
+        if "LILRA3" in genes:
             calls.append(cn.call_lilra3_primary(
                 sample, str(bam), model, reference=target or bwa_index,
                 loci_mod=target_loci))
@@ -206,7 +219,7 @@ def call_one(row: dict, reference: str, bwa_index: str, outdir: Path,
                       "alt_verdict": "", "assembly": "", "n_pairs": "",
                       "support": "",
                       "notes": str(exc)[:200].replace("\n", " ")}
-                     for g in genes_for(target_assembly)],
+                     for g in genes],
         }
     finally:
         # Always: when --keep-realigned is set the BAM is written under outdir,
@@ -256,6 +269,9 @@ def main() -> int:
                    help="bwa index base, if it is not beside --target")
     p.add_argument("-o", "--output", type=Path, required=True,
                    help="LILRA6 copy number, TSV, one row per sample")
+    p.add_argument("--genes",
+                   help="comma-separated subset of the genes this target can "
+                        "report, e.g. LILRA6. Defaults to all of them")
     p.add_argument("--threads", type=int, default=8,
                    help="threads per sample, for bwa and samtools (default 8)")
     p.add_argument("--jobs", type=int, default=1,
@@ -283,6 +299,7 @@ def main() -> int:
     # the chromosome chr19, so measuring a CHM13 BAM with GRCh38 intervals does
     # not fail, it reads sequence ~3 Mb away and reports copy number for it.
     target_assembly, target_loci = realign.assembly_of_reference(target)
+    genes = genes_for(target_assembly, args.genes)
     for ext in (".bwt", ".pac", ".sa", ".ann", ".amb"):
         if not Path(str(bwa_index) + ext).exists():
             raise SystemExit(
@@ -305,7 +322,8 @@ def main() -> int:
     args.output.parent.mkdir(parents=True, exist_ok=True)
 
     print(f"{len(rows)} samples, {args.jobs} x {args.threads} threads, "
-          f"realigning against {target_assembly} ({bwa_index})", file=sys.stderr)
+          f"realigning against {target_assembly} ({bwa_index}), "
+          f"reporting {', '.join(genes)}", file=sys.stderr)
 
     results: list[dict] = []
     started = time.time()
@@ -314,7 +332,7 @@ def main() -> int:
             futures = {
                 pool.submit(call_one, r, str(reference), str(bwa_index),
                             args.outdir, args.threads, args.keep_realigned,
-                            target_assembly, str(target)): r
+                            target_assembly, str(target), genes): r
                 for r in rows
             }
             for i, fut in enumerate(as_completed(futures), 1):
@@ -325,7 +343,7 @@ def main() -> int:
         for i, r in enumerate(rows, 1):
             res = call_one(r, str(reference), str(bwa_index), args.outdir,
                            args.threads, args.keep_realigned, target_assembly,
-                           str(target))
+                           str(target), genes)
             results.append(res)
             _progress(i, len(rows), res)
 

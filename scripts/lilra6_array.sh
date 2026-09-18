@@ -38,6 +38,8 @@ REFERENCE=${REFERENCE:-resources/reference/GRCh38_full_analysis_set_plus_decoy_h
 # resources/reference/chm13v2.0.fa to measure in T2T coordinates, where LILRA3
 # is on the primary assembly rather than on four alt contigs.
 TARGET=${TARGET:-$REFERENCE}
+# Which genes to report. Empty means everything the target can do.
+GENES=${GENES:-}
 CHUNK=${CHUNK:-4}
 
 command -v bwa >/dev/null || { echo "bwa not on PATH" >&2; exit 1; }
@@ -102,5 +104,6 @@ python3 scripts/lilra6_cn.py \
     --target "$TARGET" \
     --threads "${NSLOTS:-8}" \
     --jobs 1 \
+    ${GENES:+--genes "$GENES"} \
     --outdir "$OUTDIR/qc/$(printf '%04d' "$SGE_TASK_ID")" \
     -o "$part.tsv"

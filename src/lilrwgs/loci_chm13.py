@@ -93,6 +93,23 @@ GENE_BODIES: dict[str, Gene] = {
 # interval's length shared across four alt contigs; here it is simply the gene.
 LILRA3_SPAN = 7_126
 
+# The 6.7 kb deletion, in this assembly's coordinates, and the interval LILRA3
+# copy number is actually measured over. Not the same as the gene: it takes the
+# gene's 5' end (high coordinates, since LILRA3 is minus-strand) plus ~1.9 kb
+# beyond it, and leaves the 3' end behind at two copies in everyone.
+#
+# Measured from the data rather than annotated: in a deletion homozygote the
+# depth here is exactly zero at MAPQ 0 as well as MAPQ 20 -- absent sequence,
+# not unmappable sequence -- while the flanks either side carry the sample's
+# ordinary ~35x. 6,764 bp against the 6.7 kb of Norman et al. 2003.
+LILRA3_DELETION = (CHROM, 57_379_392, 57_386_156)
+
+# The part of LILRA3 that survives the deletion, present at two copies in
+# everyone. A QC probe, not a target -- the counterpart of
+# lilrwgs.loci.LILRA3_RETAINED. If this does not read flat near lambda_1 x 2,
+# the region is not being sampled as assumed.
+LILRA3_RETAINED = [(CHROM, 57_377_083, 57_379_392)]
+
 # ---------------------------------------------------------------------------
 # Extraction
 # ---------------------------------------------------------------------------
@@ -126,24 +143,41 @@ UNIQUE_WINDOWS = {
                (CHROM, 57_319_444, 57_320_258)],   # 814 bp,   identity 0.9975
     "LILRB3": [(CHROM, 57_296_847, 57_297_439),    # 592 bp,   identity 1.0000
                (CHROM, 57_298_639, 57_299_928)],   # 1,289 bp, identity 0.9984
-    # LILRA3 is the exception, and it has to be derived rather than transferred:
-    # there is no GRCh38 window to move, because GRCh38 has no LILRA3.
+    # LILRA3 is measured over the DELETION, not over the gene, and the
+    # difference is not pedantry — it is the whole calibration.
     #
-    # It needs no window in the usual sense. LILRA6 and LILRB3 are 47% and 60%
-    # ambiguous by the 100-mer criterion, which is why only their 3' ends are
-    # measurable; LILRA3 is **9.6%**, and the ambiguity is scattered — 677
-    # ambiguous 100-mer starts in 34 runs, the longest spanning ~182 bp, with no
-    # contiguous dead zone. Every base of the gene is covered by some
-    # unambiguous 100-mer, and since a read is 150 bp and the criterion's window
-    # is 100, a read over any base can carry unique sequence.
+    # The first version of this used the gene body, and every one of the seven
+    # deletion homozygotes in the 100-sample cohort came back CN 1, at estimates
+    # clustered at 0.56-0.64. The cause: the 6.7 kb deletion removes the first
+    # six translated exons, and LILRA3 is on the minus strand, so it takes the
+    # *high-coordinate* end of the gene and ~1.9 kb beyond it while leaving the
+    # 3' end behind. A window shaped like the gene therefore contains ~2.3 kb
+    # that is present at two copies in everyone, which floors the estimate at
+    # 2 x 2310 / 7126 = 0.65 instead of 0 and makes a homozygous deletion read
+    # as a heterozygote.
     #
-    # That is biology rather than luck: LILRA3 is the soluble family member,
-    # lacking the transmembrane and cytoplasmic domains, and is not a recent
-    # duplicate of a neighbour the way LILRA6 and LILRB3 are of each other.
+    # `loci.py` already recorded the same fact for GRCh38 -- "~980 bp of
+    # LILRA3's 3' end survives the deletion... at two copies in everyone" -- and
+    # it was not carried across.
     #
-    # So the window is the gene. This is the measurement GRCh38 cannot make at
-    # all — there, LILRA3 is MAPQ-0 depth over four alt haplotypes.
-    "LILRA3": [(CHROM, 57_377_083, 57_384_209)],   # 7,126 bp, 9.6% ambiguous
+    # The interval below is the deletion itself, measured rather than inferred:
+    # in HG00592 (a deletion homozygote) depth over chr19:57,379,393-57,386,156
+    # is exactly zero at both MAPQ 20 and MAPQ 0, while a CN 2 sample carries
+    # ~40x straight through it, and the flanks either side are ~35x in both.
+    # MAPQ 0 reading zero as well is the control that matters: it says the
+    # sequence is absent, not merely unmappable.
+    #
+    # 6,764 bp, against the 6.7 kb of Norman et al. 2003 (Immunogenetics
+    # 55:165-171, doi:10.1007/s00251-003-0561-1), who also report that it
+    # "encompasses the first six translated exons".
+    #
+    # 9.5% of its 100-mers have a twin in the LRC -- about the same as the gene,
+    # and far below LILRA6's 47% -- so the whole interval is one window. That
+    # LILRA3 is this separable is biology rather than luck: it is the soluble
+    # family member, lacking the transmembrane and cytoplasmic domains, not a
+    # recent duplicate of a neighbour the way LILRA6 and LILRB3 are of each
+    # other.
+    "LILRA3": [(CHROM, 57_379_392, 57_386_156)],   # 6,764 bp, 9.5% ambiguous
 }
 
 # ---------------------------------------------------------------------------
