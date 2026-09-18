@@ -126,6 +126,24 @@ UNIQUE_WINDOWS = {
                (CHROM, 57_319_444, 57_320_258)],   # 814 bp,   identity 0.9975
     "LILRB3": [(CHROM, 57_296_847, 57_297_439),    # 592 bp,   identity 1.0000
                (CHROM, 57_298_639, 57_299_928)],   # 1,289 bp, identity 0.9984
+    # LILRA3 is the exception, and it has to be derived rather than transferred:
+    # there is no GRCh38 window to move, because GRCh38 has no LILRA3.
+    #
+    # It needs no window in the usual sense. LILRA6 and LILRB3 are 47% and 60%
+    # ambiguous by the 100-mer criterion, which is why only their 3' ends are
+    # measurable; LILRA3 is **9.6%**, and the ambiguity is scattered — 677
+    # ambiguous 100-mer starts in 34 runs, the longest spanning ~182 bp, with no
+    # contiguous dead zone. Every base of the gene is covered by some
+    # unambiguous 100-mer, and since a read is 150 bp and the criterion's window
+    # is 100, a read over any base can carry unique sequence.
+    #
+    # That is biology rather than luck: LILRA3 is the soluble family member,
+    # lacking the transmembrane and cytoplasmic domains, and is not a recent
+    # duplicate of a neighbour the way LILRA6 and LILRB3 are of each other.
+    #
+    # So the window is the gene. This is the measurement GRCh38 cannot make at
+    # all — there, LILRA3 is MAPQ-0 depth over four alt haplotypes.
+    "LILRA3": [(CHROM, 57_377_083, 57_384_209)],   # 7,126 bp, 9.6% ambiguous
 }
 
 # ---------------------------------------------------------------------------

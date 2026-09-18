@@ -301,6 +301,41 @@ def call_lilra6(sample: str, bam: str, model: CoverageModel, *,
     return a6
 
 
+def call_lilra3_primary(sample: str, bam: str, model: CoverageModel, *,
+                        reference: str | None = None,
+                        samtools: str = "samtools", loci_mod=loci) -> CNCall:
+    """LILRA3 by ordinary MAPQ-20 depth, for an assembly that carries it.
+
+    This is the measurement GRCh38 cannot make. There, chr19 carries the
+    deletion, so LILRA3 exists only on four near-identical alt haplotypes and
+    has to be read as MAPQ-0 depth counting supplementary records, normalised on
+    a MAPQ-0 baseline — a route with a paralogous-pile-up problem at one end and,
+    after a regional extraction, a missing-reads problem at the other.
+
+    On CHM13 it is a gene on the primary assembly that happens to be unusually
+    unique (9.6% of its 100-mers have a twin in the LRC, against 47% for LILRA6),
+    so it is measured the same way LILRA6 is: depth over its window divided by
+    λ₁. Same units, same floor, same baseline as every other gene here.
+
+    **A true zero and a failed query stay distinct.** LILRA3 CN 0 is a common
+    real state — ~24% deletion allele frequency, and the major allele at CHB and
+    JPT — so `samtools depth -a` reporting every base at zero gives an estimate
+    of 0.0 and a confident CN 0, while a query that could not run at all returns
+    None and the call is `failed`. Merging those two would manufacture deletions,
+    which in this gene is the most expensive available mistake.
+    """
+    if "LILRA3" not in getattr(loci_mod, "UNIQUE_WINDOWS", {}):
+        call = CNCall(sample=sample, gene="LILRA3", method="unique_window_q20")
+        call.status = "not_measured"
+        call.notes.append(
+            f"{loci_mod.ASSEMBLY} has no LILRA3 depth window; on GRCh38 use "
+            "cn.call_sample, which reads the alt contigs and the junction")
+        return call
+    return _call_unique_window(sample, "LILRA3", bam, model,
+                               reference=reference, samtools=samtools,
+                               loci_mod=loci_mod)
+
+
 def _call_unique_window(sample: str, gene: str, bam: str, model: CoverageModel,
                         *, reference: str | None, samtools: str,
                         loci_mod=loci) -> CNCall:

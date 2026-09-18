@@ -205,23 +205,35 @@ def unique_windows(ambiguous: list[bool], chrom: str, gene_start: int,
     The union is the honest interval: every base in it is covered by at least
     one 100-mer with no twin in the LRC.
     """
-    spans: list[tuple[int, int]] = []
-    run_start = None
-    for i, amb in enumerate(ambiguous + [True]):
-        if not amb and run_start is None:
-            run_start = i
-        elif amb and run_start is not None:
-            spans.append((gene_start + run_start, gene_start + i - 1 + WINDOW))
-            run_start = None
+    # Per base, not per run. A base is measurable if some unambiguous 100-mer
+    # covers it; maximal runs of those bases are the windows. Defining it this
+    # way makes overlap impossible by construction rather than by a merge, and —
+    # the reason it was changed — it stops a merge from swallowing the ambiguous
+    # stretches between two runs.
+    #
+    # That mattered at LILRA3, which is only 9.6% ambiguous and came out as one
+    # window spanning the entire gene, the 9.6% included. Ambiguous positions
+    # attract multi-mapping reads that fall below the MAPQ floor, so they
+    # contribute near-zero depth to a MAPQ-20 mean: including them does not add
+    # noise, it biases the gene's copy number *down* by roughly their fraction.
+    n = len(ambiguous)
+    covered = bytearray(n + WINDOW)
+    for i, amb in enumerate(ambiguous):
+        if not amb:
+            for j in range(i, i + WINDOW):
+                covered[j] = 1
 
-    merged: list[tuple[str, int, int]] = []
-    for s, e in sorted(spans):
-        if merged and s <= merged[-1][2]:
-            c, ms, me = merged[-1]
-            merged[-1] = (c, ms, max(me, e))
-        else:
-            merged.append((chrom, s, e))
-    return [w for w in merged if w[2] - w[1] >= MIN_WINDOW]
+    windows: list[tuple[str, int, int]] = []
+    run_start = None
+    for i, c in enumerate(bytes(covered) + b"\x00"):
+        if c and run_start is None:
+            run_start = i
+        elif not c and run_start is not None:
+            s, e = gene_start + run_start, gene_start + i
+            if e - s >= MIN_WINDOW:
+                windows.append((chrom, s, e))
+            run_start = None
+    return windows
 
 
 def transfer_windows(reference: Path, grch38: Path, work: Path,

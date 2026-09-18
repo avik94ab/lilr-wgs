@@ -65,7 +65,7 @@ SAMPLE_SUFFIXES = (".final.cram", ".slice.bam", ".cram", ".bam", ".sam")
 HEADER_TOKENS = {"sample", "sample_id", "cram", "crai", "bam", "bai", "index"}
 
 OUTPUT_FIELDS = [
-    "sample", "copies", "estimate", "confidence", "status",
+    "sample", "gene", "copies", "estimate", "confidence", "status",
     "ambiguous", "method", "lambda1", "mean_depth", "alt_verdict",
     "assembly", "n_pairs", "notes",
     # The raw counts the call was made from. Carried for the same reason
@@ -128,6 +128,18 @@ def read_inputs(path: Path) -> list[dict]:
     return rows
 
 
+def genes_for(target_assembly: str) -> tuple[str, ...]:
+    """Which genes this target can report.
+
+    Used for the failure path as well as the success one, so a sample that dies
+    leaves the same set of rows it would have produced. A gene silently missing
+    for some samples and present for others is a third state nobody reads for.
+    """
+    mod = realign.LOCI_BY_ASSEMBLY.get(target_assembly)
+    windows = getattr(mod, "UNIQUE_WINDOWS", {}) if mod else {}
+    return ("LILRA6", "LILRA3") if "LILRA3" in windows else ("LILRA6",)
+
+
 def call_one(row: dict, reference: str, bwa_index: str, outdir: Path,
              threads: int, keep_bam: bool, target_assembly: str = "GRCh38",
              target: str | None = None) -> dict:
@@ -165,27 +177,19 @@ def call_one(row: dict, reference: str, bwa_index: str, outdir: Path,
         target_loci = realign.LOCI_BY_ASSEMBLY[target_assembly]
         model = coverage.measure(sample, str(bam), reference=target or bwa_index,
                                  loci_mod=target_loci)
-        call = cn.call_lilra6(sample, str(bam), model,
-                              reference=target or bwa_index,
-                              loci_mod=target_loci)
-        r = call.as_row()
-        row = {
-            "sample": sample,
-            "copies": r["copies"],
-            "estimate": r["estimate"],
-            "confidence": r["confidence"],
-            "status": r["status"],
-            "ambiguous": r["ambiguous"],
-            "method": r["method"],
-            "lambda1": round(model.lambda1, 2),
-            "mean_depth": call.support.get("mean_depth", ""),
-            "alt_verdict": model.alt_verdict,
-            "assembly": target_assembly,
-            "n_pairs": stats.n_pairs,
-            "notes": ";".join(filter(None, [r["notes"]] + stats.warnings)),
-            "support": r["support"],
-        }
-        return {"sample": sample, "ok": True, "row": row,
+        calls = [cn.call_lilra6(sample, str(bam), model,
+                                reference=target or bwa_index,
+                                loci_mod=target_loci)]
+        # LILRA3 only where the assembly carries it. On GRCh38 this returns
+        # `not_measured` with a reason rather than a number, because the routes
+        # that do work there -- alt-contig depth, the deletion junction -- need
+        # the CRAM slice, not a realigned regional extraction.
+        if "LILRA3" in genes_for(target_assembly):
+            calls.append(cn.call_lilra3_primary(
+                sample, str(bam), model, reference=target or bwa_index,
+                loci_mod=target_loci))
+        rows = [_row(sample, c, model, stats, target_assembly) for c in calls]
+        return {"sample": sample, "ok": True, "rows": rows,
                 "realign": stats.as_row(), "coverage": model.as_row(),
                 "elapsed_s": round(time.time() - started, 1)}
 
@@ -196,18 +200,41 @@ def call_one(row: dict, reference: str, bwa_index: str, outdir: Path,
         return {
             "sample": sample, "ok": False, "error": str(exc)[:600],
             "elapsed_s": round(time.time() - started, 1),
-            "row": {"sample": sample, "copies": "", "estimate": "",
-                    "confidence": 0.0, "status": "failed", "ambiguous": False,
-                    "method": "", "lambda1": "", "mean_depth": "",
-                    "alt_verdict": "", "assembly": "", "n_pairs": "",
-                    "support": "",
-                    "notes": str(exc)[:200].replace("\n", " ")},
+            "rows": [{"sample": sample, "gene": g, "copies": "", "estimate": "",
+                      "confidence": 0.0, "status": "failed", "ambiguous": False,
+                      "method": "", "lambda1": "", "mean_depth": "",
+                      "alt_verdict": "", "assembly": "", "n_pairs": "",
+                      "support": "",
+                      "notes": str(exc)[:200].replace("\n", " ")}
+                     for g in genes_for(target_assembly)],
         }
     finally:
         # Always: when --keep-realigned is set the BAM is written under outdir,
         # not here, so there is nothing in the scratch dir worth keeping either
         # way. Left behind, it is ~200 MB of FASTQ and slice per sample.
         shutil.rmtree(work, ignore_errors=True)
+
+
+def _row(sample: str, call, model, stats, target_assembly: str) -> dict:
+    """One output row from one CNCall."""
+    r = call.as_row()
+    return {
+        "sample": sample,
+        "gene": r["gene"],
+        "copies": r["copies"],
+        "estimate": r["estimate"],
+        "confidence": r["confidence"],
+        "status": r["status"],
+        "ambiguous": r["ambiguous"],
+        "method": r["method"],
+        "lambda1": round(model.lambda1, 2),
+        "mean_depth": call.support.get("mean_depth", ""),
+        "alt_verdict": model.alt_verdict,
+        "assembly": target_assembly,
+        "n_pairs": stats.n_pairs,
+        "notes": ";".join(filter(None, [r["notes"]] + stats.warnings)),
+        "support": r["support"],
+    }
 
 
 def main() -> int:
@@ -303,11 +330,12 @@ def main() -> int:
             _progress(i, len(rows), res)
 
     results.sort(key=lambda r: r["sample"])
-    lilra6 = [res["row"] for res in results]
+    all_rows = [row for res in results for row in res["rows"]]
+    lilra6 = [r for r in all_rows if r["gene"] == "LILRA6"]
 
-    _write_tsv(args.output, lilra6)
+    _write_tsv(args.output, all_rows)
     (args.outdir / "qc.json").write_text(json.dumps(
-        [{k: v for k, v in r.items() if k != "row"} for r in results],
+        [{k: v for k, v in r.items() if k != "rows"} for r in results],
         indent=2, sort_keys=True))
 
     n_failed = sum(1 for r in results if not r["ok"])
@@ -330,8 +358,8 @@ def main() -> int:
 
 def _progress(i: int, total: int, res: dict) -> None:
     if res["ok"]:
-        row = res["row"]
-        detail = f"LILRA6={row['copies']} ({row['status']})"
+        detail = "  ".join(f"{r['gene']}={r['copies']} ({r['status']})"
+                           for r in res["rows"])
     else:
         detail = f"FAILED: {res['error'].splitlines()[0][:70]}"
     print(f"  [{i}/{total}] {res['sample']}: {detail} "
