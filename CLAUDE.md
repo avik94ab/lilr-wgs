@@ -68,14 +68,24 @@ the two are comparable and why `validation/compare_realign.py` can compare them.
 Do not fork the copy-number logic to serve the second path — if realigned input
 needs different thresholds, the thresholds were wrong.
 
-**The realign path reports LILRA6 and only LILRA6**, via `cn.call_lilra6`. That
-is a deliberate narrowing, not an unfinished feature. LILRB3 is still measured
-inside it because LILRA6's only independent check is the pooled LILRA6+LILRB3
-depth. LILRA3 is not measured at all: its depth route cannot survive a regional
-extraction (PLAN.md §12), and its junction route scores 97/100 where the
-CRAM-as-is path scores 100/100 — a number this path calls less well than the
+**What the realign path reports depends on the target assembly.** Against GRCh38
+it is LILRA6 alone, via `cn.call_lilra6`; against CHM13 it is LILRA6 and LILRA3.
+LILRB3 is measured wherever LILRA6 is, because LILRA6's only independent check is
+the pooled LILRA6+LILRB3 depth, and is not reported. `genes_for()` decides this
+from the target's `UNIQUE_WINDOWS`, and `--genes` narrows it.
+
+LILRA3 is refused on GRCh38 rather than approximated: its depth route cannot
+survive a regional extraction (§12) and its junction route scores 97/100 where
+the CRAM-as-is path scores 100/100. A number this path calls less well than the
 path beside it is worse than no number. If you add a gene here, say what it
 scores against `cn_calls.tsv` first.
+
+**There are two references and they do different jobs.** `--target` is what reads
+are realigned to and measured in; `--reference` only *decodes* CRAM input, which
+stores differences from a reference and cannot be read without one. BAM input
+needs no `--reference`. Nothing after the slice touches it — mixing them up gives
+you a GC curve, or a coordinate table, from the wrong assembly, and both produce
+copy numbers rather than errors.
 
 `src/lilrwgs/` is an importable package; `scripts/` holds drivers; `workflow/`
 holds only the DAG. Pure logic (`depth_model`, the fitting functions in
@@ -142,6 +152,11 @@ recruitment, arbitration and realignment have each dropped reads.
   which is a cohort of LILRA6 deletion homozygotes. `realign.index_is_alt_aware`,
   `scripts/check_env.sh` and `scripts/lilra6_array.sh` each check for the file
   because nothing downstream can tell that case from real data.
+- **chr19 is called `chr19` in CHM13 and GRCh37 too**, and CHM13's LRC sits
+  ~3 Mb right of GRCh38's — far enough to be a different LILR gene, close enough
+  that every coordinate still resolves. `realign.source_assembly` and
+  `realign.assembly_of_reference` both decide by chromosome 19's length
+  (GRCh38 58,617,616 / CHM13 61,707,364), never by a filename.
 - **chr19 is called `chr19` in GRCh37 too.** A name check passes and the
   extraction returns a different half-megabase. `realign.source_assembly` tells
   the two apart by chromosome 19's length (58,617,616 vs 59,128,983) and refuses

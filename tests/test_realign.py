@@ -408,3 +408,34 @@ class TestInputList:
     def test_empty_list_is_refused(self, tmp_path):
         with pytest.raises(SystemExit):
             self._read(tmp_path, "# nothing here\n")
+
+
+class TestReferenceRoles:
+    """`--target` measures, `--reference` only decodes.
+
+    CRAM stores differences from a reference, so its bytes cannot be read
+    without one -- but that is the *only* thing the source reference does here.
+    Nothing after the slice touches it. A BAM needs none at all, and requiring
+    one implied a dependency on GRCh38 that the CHM13 path does not have.
+    """
+
+    def _main_source(self) -> str:
+        import inspect
+
+        import lilra6_cn
+        return inspect.getsource(lilra6_cn.main)
+
+    def test_reference_is_not_required(self):
+        """A BAM-input user must never have to name an assembly they do not use."""
+        src = self._main_source()
+        i = src.find('"--reference"')
+        assert i > 0
+        # The argument block for --reference, up to the next add_argument.
+        block = src[i:src.find("p.add_argument", i + 10)]
+        assert "required=True" not in block
+
+    def test_target_falls_back_to_reference_and_back(self):
+        """Either may stand in for the other; only both missing is an error."""
+        src = self._main_source()
+        assert "args.target or args.reference" in src
+        assert "args.reference or target" in src

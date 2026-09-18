@@ -132,16 +132,27 @@ property of every input that has to be measured per sample and can only be
 refused.
 
 ```bash
-bash scripts/fetch_reference.sh              # 3.2 GB, once
-bash scripts/fetch_bwa_index.sh              # 5.3 GB, once — includes the .alt
+bash scripts/fetch_t2t_reference.sh          # 3.1 GB + ~50 min to build the index
 
 printf '%s\n' /data/*.final.cram > inputs.txt
 python3 scripts/lilra6_cn.py --inputs inputs.txt \
+    --target resources/reference/chm13v2.0.fa \
     --reference resources/reference/GRCh38_full_analysis_set_plus_decoy_hla.fa \
-    --threads 8 --jobs 4 -o lilra6_cn.tsv
+    --threads 8 --jobs 4 -o lilr_cn.tsv
 
-qsub -t 1-25 scripts/lilra6_array.sh inputs.txt results/lilra6   # or on SGE
+TARGET=resources/reference/chm13v2.0.fa \
+  qsub -t 1-25 scripts/lilra6_array.sh inputs.txt results/lilr   # or on SGE
 ```
+
+`--target` is what the reads are realigned to and measured in. `--reference` is
+only there to **decode** the input: CRAM stores differences from a reference, so
+its bytes cannot be read without one. **BAM input needs no `--reference` at
+all**, and neither does a CRAM compressed against the target itself.
+
+| target | genes reported |
+|---|---|
+| `chm13v2.0.fa` | **LILRA6 and LILRA3** |
+| GRCh38 analysis set | LILRA6 only — GRCh38 has no LILRA3 to measure |
 
 `--inputs` is one sample per line, with one, two or three whitespace-separated
 columns: the CRAM alone, the CRAM and its index, or an explicit sample name
@@ -174,17 +185,21 @@ re-pairing or singleton handling lost reads — not that the pipeline works on a
 input aligned to something else. Against truth, `validation/` remains the score.
 PLAN.md §12 has the detail.
 
-**Why LILRA3 is not reported here.** It was, and it was wrong. Its depth route
-counts MAPQ-0 alt-contig depth including supplementary records, and on HG00138
-135 of the 964 reads with an alt-contig record have no primary in the LRC at all
-— their primaries are scattered across chr2, chr3, chrX, repeat-derived reads
-with a supplementary hit on the LILRA3 contigs. A regional extraction cannot
-hold them, so realigning loses 21% of that depth and reads true CN 2 as CN 1.
-Routing it through the deletion junction instead recovers 78.4% → 97.0%, but the
-junction is weakest exactly at heterozygotes, and all three residual errors are
-CN 1 read as CN 2. **The CRAM-as-is path calls LILRA3 at 100/100 on the same
-samples, so reporting the weaker number next to it would be worse than reporting
-none.** `cn.call_sample` is where LILRA3 is called.
+**LILRA3, on CHM13.** GRCh38 cannot measure it at all — its chr19 carries the
+deletion, so LILRA3 lives only on alt contigs and has to be read as MAPQ-0 depth
+across four near-identical haplotypes, a route that cannot survive a regional
+extraction. CHM13 carries the insertion allele, so there it is an ordinary
+MAPQ-20 measurement like any other gene, and scores **100/100** against the
+CRAM-as-is calls with estimates landing at 0.000 / 0.988 / 2.003 for true copy
+numbers 0 / 1 / 2. PLAN.md §14.
+
+The window is the sequence that is **deleted and mappable** — 4,817 bp, the
+intersection of the 6.7 kb deletion with the gene body. Both halves are
+load-bearing, and getting either wrong produces plausible copy numbers rather
+than errors: the gene alone floors a homozygote at 0.65, because 2.3 kb of the
+gene survives the deletion; the deletion alone drags a two-copy sample to 1.70,
+because its last 1.9 kb is Alu-derived breakpoint flank that reads near-zero at
+MAPQ 20 in everyone.
 
 Two further limits. The extraction is only as complete as the alignment it
 reads from, so a read the input aligner put outside these intervals is not there

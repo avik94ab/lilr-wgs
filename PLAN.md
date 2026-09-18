@@ -640,3 +640,88 @@ page cache is warm, which is the argument for chunking. The index is built, not
 fetched: no prebuilt bwa index is published for CHM13 (checked; the analysis_set
 and indexes/ paths 404), and `bwa index` takes ~50 minutes. There is no `.alt`
 file and there should not be, which is most of the point.
+
+---
+
+## 14. LILRA3 on CHM13, and two wrong windows that both looked right
+
+§13 ends with LILRA6 through CHM13 at 99/100. LILRA3 is the gene the second
+assembly was fetched for, and getting it right took three windows. The two failed
+ones matter more than the successful one, because neither announced itself: both
+produced complete, plausible, correctly-typed copy numbers.
+
+| window | bp | CN 0 | CN 1 | CN 2 | integer agreement |
+|---|---|---|---|---|---|
+| the gene | 7,126 | 0.60 | 1.28 | 2.00 | 93/100 — all 7 homozygotes wrong |
+| the deletion | 6,764 | 0.000 | 0.727 | 1.558 | 85/100 — CN 2 collapsed |
+| **deleted ∩ mappable** | **4,817** | **0.000** | **0.988** | **2.003** | **100/100** |
+
+**The gene is not the deletion.** The 6.7 kb deletion removes the first six
+translated exons, and LILRA3 is on the minus strand, so it takes the gene's
+*high-coordinate* end plus ~1.9 kb beyond it and leaves the 3' end behind. A
+gene-shaped window therefore carries ~2.3 kb present at two copies in everyone,
+which floors a homozygote at 2 × 2310 / 7126 = 0.65 rather than 0 — and every one
+of the cohort's seven deletion homozygotes came back CN 1. `loci.py` had already
+recorded the same fact for GRCh38 ("~980 bp of LILRA3's 3' end survives the
+deletion... at two copies in everyone") and it was not carried across.
+
+**The deletion is not all mappable.** Its last ~1.9 kb lies beyond the gene and is
+Alu-derived — unsurprising, since the breakpoint sits in an Alu — and reads
+near-zero at MAPQ 20 in everyone, carrier or not. Measured on HG00119, a two-copy
+sample: 40.1× over the deleted part of the gene against 8.3× over that tail, with
+λ₁ at 18.3. Including it does not add signal, it dilutes: the full deletion reads
+31.0× and puts a two-copy sample at 1.70.
+
+So the window is the intersection, and both halves are load-bearing.
+
+### How it was verified without GRCh38
+
+GRCh38 cannot be the standard for a gene it does not contain, so the breakpoints
+were measured directly. In HG00592 the depth over chr19:57,379,393-57,386,156 is
+exactly zero across 6,764 bp while the flanks either side carry the sample's
+ordinary ~35×, and a two-copy sample runs ~40× straight through the same
+interval. **It reads zero at MAPQ 0 as well as MAPQ 20**, which is the control
+that matters: the sequence is absent, not merely unmappable.
+
+Three independent things agree:
+
+- the measured block is 6,764 bp against the 6.7 kb of Norman et al. 2003
+  (*Immunogenetics* 55:165-171, doi:10.1007/s00251-003-0561-1), who also report
+  that it "encompasses the first six translated exons" — consistent with the
+  deletion sitting at the minus-strand gene's 5' end;
+- Hirayasu et al. 2006 (*Hum Genet* 119:436-43, doi:10.1007/s00439-006-0152-y)
+  put the deletion allele at **71% in Japanese**, against the 75.5% at JPT and
+  75.2% at CHB this pipeline reported for the full 2,504 (§11);
+- the interval is 9.5% ambiguous by the 100-mer criterion — about the same as the
+  gene, and far below LILRA6's 47% — so it is one clean window. That LILRA3 is
+  this separable is biology rather than luck: it is the soluble family member,
+  lacking the transmembrane and cytoplasmic domains, and not a recent duplicate
+  of a neighbour the way LILRA6 and LILRB3 are of each other.
+
+### What the 100-sample run established
+
+| as-is CN | n | median estimate | range | median depth | median λ₁ |
+|---|---|---|---|---|---|
+| 0 | 7 | 0.000 | 0.000–0.000 | 0.0 | 18.6 |
+| 1 | 34 | 0.988 | 0.886–1.116 | 18.1 | 18.0 |
+| 2 | 59 | 2.003 | 1.761–2.196 | 36.2 | 17.9 |
+
+Confusion against the CRAM-as-is calls is pure diagonal: 7→7, 34→34, 59→59.
+
+**The integer agreement is the weaker half of this evidence.** Estimates land at
+0.000, 0.988 and 2.003 against ideals of 0, 1 and 2 — within 1.2% and 0.15%, with
+no fitted constant anywhere — and depth tracks λ₁ exactly: 18.1 against 1 × 18.0,
+36.2 against 2 × 17.9. CN 0 reads 0.000 with *zero range* across all seven
+samples, which is what an absent sequence looks like rather than a low one.
+
+Both failed windows would have passed an integer-agreement check on most samples.
+Only the per-class estimate breakdown separated them, and that is the check to
+keep.
+
+### LILRA6 on CHM13, at scale
+
+A partial run over the full collection reached 173 samples before being stopped:
+**173/173 against the GRCh38 as-is calls**, distributions identical at every
+class including the tails (CN 1: 5, CN 4: 6, CN 5: 1), where a scale error would
+appear first. ~12-15 h for all 2,504 at ~10 concurrent tasks; the work is
+resumable, since the array script is chunk-indexed.

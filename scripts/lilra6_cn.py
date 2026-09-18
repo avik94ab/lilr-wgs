@@ -24,19 +24,28 @@ Here the LRC and the control loci are pulled out of whatever alignment they
 arrived in and realigned against the analysis set with its alt index, so
 ALT-awareness is a property of this pipeline rather than of the input.
 
-What comes out is LILRA6 and only LILRA6, one row per sample.
+What comes out depends on what the target assembly can measure. Against GRCh38
+that is LILRA6; against CHM13 it is LILRA6 and LILRA3, because CHM13 carries the
+LILRA3 insertion allele and GRCh38 does not. `--genes` narrows it further.
+
+    --target chm13v2.0.fa              -> LILRA6 and LILRA3
+    --target GRCh38_...fa              -> LILRA6
+    --target chm13v2.0.fa --genes LILRA3 -> LILRA3
 
 `status` is not decoration: a failed measurement and a true zero are different
-values. LILRA6 CN 0 is real and rare, and if the realignment is not ALT-aware
-every MAPQ-20 window in the cluster reads near zero for every sample alike — so
-that case is reported `not_measured` and left empty, never filled in as 0.
+values. LILRA6 CN 0 is real and rare, LILRA3 CN 0 is common -- ~24% allele
+frequency, and the major allele at CHB and JPT -- and if a GRCh38 realignment is
+not ALT-aware every MAPQ-20 window in the cluster reads near zero for every
+sample alike. Those cases are reported `not_measured` and left empty, never
+filled in as 0.
 
-LILRB3 is still measured internally, because LILRA6's only independent check is
-the pooled LILRA6+LILRB3 depth; it is not reported. LILRA3 is not measured at
-all. Its depth route cannot survive a regional extraction — the reads it counts
-have their primaries scattered genome-wide — and its junction route, while
-usable, is materially weaker here than on a CRAM slice. `cn.call_sample` is
-where LILRA3 is called, from the CRAM as-is. See PLAN.md §12.
+LILRB3 is measured internally wherever LILRA6 is, because LILRA6's only
+independent check is the pooled LILRA6+LILRB3 depth; it is not reported.
+
+LILRA3 is refused on GRCh38 rather than approximated. The routes that work there
+-- MAPQ-0 depth over four alt contigs, and the deletion junction -- need the CRAM
+slice, not a realigned regional extraction (PLAN.md §12). On CHM13 it is an
+ordinary MAPQ-20 depth measurement and scores 100/100 (PLAN.md §14).
 """
 
 from __future__ import annotations
@@ -257,9 +266,12 @@ def main() -> int:
     p.add_argument("--inputs", type=Path, required=True,
                    help="list file of CRAM/BAM paths or URLs, optional index "
                         "and sample-name columns")
-    p.add_argument("--reference", type=Path, required=True,
-                   help="the FASTA the input CRAMs were compressed against, "
-                        "needed to decode them; unused for BAM input")
+    p.add_argument("--reference", type=Path,
+                   help="the FASTA the input CRAMs were compressed against. "
+                        "CRAM stores differences from a reference, so its bytes "
+                        "cannot be read without one -- but that is the only "
+                        "thing this is for, and BAM input needs none. Defaults "
+                        "to --target")
     p.add_argument("--target", type=Path,
                    help="the reference to realign to, and the bwa index base. "
                         "Defaults to --reference. Point it at chm13v2.0.fa to "
@@ -283,12 +295,21 @@ def main() -> int:
                    help="keep the realigned BAMs under <outdir>/realigned")
     args = p.parse_args()
 
-    reference = args.reference.resolve()
-    target = (args.target or args.reference).resolve()
+    # --target is the measurement reference; --reference only decodes the input.
+    # Either can stand in for the other when only one is given, because the
+    # common cases need only one: BAM input needs no decoding reference at all,
+    # and a CRAM measured in its own assembly needs no second one.
+    target = (args.target or args.reference)
+    if target is None:
+        raise SystemExit("give --target (what to realign to), and --reference "
+                         "as well if the inputs are CRAMs compressed against a "
+                         "different assembly")
+    target = target.resolve()
+    reference = (args.reference or target).resolve()
     bwa_index = (args.bwa_index or target).resolve()
 
     if not reference.exists():
-        raise SystemExit(f"{reference}: not found; run scripts/fetch_reference.sh")
+        raise SystemExit(f"{reference}: not found")
     if not target.exists():
         raise SystemExit(f"{target}: not found; "
                          "run scripts/fetch_t2t_reference.sh for CHM13")
