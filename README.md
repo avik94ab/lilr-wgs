@@ -51,6 +51,23 @@ The same run reproduces Hardy-Weinberg for the LILRA3 deletion independently in
 all 26 populations, at frequencies from 0.08 to 0.76 — a check that needs no
 truth set. `PLAN.md` §11.
 
+## What the cohort looks like
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/figures/cn_by_superpopulation-dark.png">
+  <img alt="Stacked bars of LILRA6 and LILRA3 copy-number composition for each of the five 1000 Genomes superpopulations. East Asian samples are the outlier in both genes: only 10% carry three or more copies of LILRA6, against 30 to 45% elsewhere, while 31% carry no LILRA3 at all, against 1 to 6% elsewhere." src="docs/figures/cn_by_superpopulation.png" width="100%">
+</picture>
+
+Both genes vary by ancestry, and **East Asian samples are the outlier in both, in
+opposite directions**: 10% carry three or more copies of LILRA6 where every other
+superpopulation runs 30–45%, and 31% carry no LILRA3 at all where the others run
+1–6%. At CHB and JPT the LILRA3 deletion is the *major* allele, at ~75% — the
+"~24% deletion frequency" usually quoted is a European-weighted figure.
+
+The rarest classes are real but too thin to see at this scale: 11 samples carry
+no LILRA6 at all — 10 of them African-ancestry — and 36 carry 5 or 6 copies.
+Regenerate the figure with `scripts/plot_cn_by_superpop.py`.
+
 ## Just the copy number, on any cluster
 
 [`portable/lilr_cn.py`](portable/README.md) is the copy-number half of this
