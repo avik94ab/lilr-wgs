@@ -24,7 +24,7 @@ python3 scripts/make_manifest.py --collection 2504 -o config/manifest.tsv
 snakemake -s workflow/Snakefile --cores 32
 snakemake -s workflow/Snakefile --profile profiles/sge     # Wynton
 
-python -m pytest tests/ -q                   # 134 tests, no cluster needed
+python -m pytest tests/ -q                   # 169 tests, no cluster needed
 ```
 
 Every stage is also a standalone CLI, so a failing sample can be debugged without
@@ -51,6 +51,14 @@ CRAM ─► [process_sample] ─► coverage model, CN, per-gene reads
 holds only the DAG. Pure logic (`depth_model`, the fitting functions in
 `coverage`, `arbitrate` in `assign`) is separated from I/O deliberately so it can
 be tested without a BAM.
+
+`portable/lilr_cn.py` is a **deliberate duplicate** of the copy-number path —
+one file, stdlib plus samtools, for people who want CN without the repository.
+It re-declares every constant rather than importing one, so the failure mode is
+drift: a threshold corrected in `src/lilrwgs/` and not there yields a script that
+still runs and is quietly wrong. `tests/test_portable.py` compares the two sides
+constant by constant and decision by decision; when it fails, the portable copy
+is what is stale. Change both or neither.
 
 **The DAG has no barrier.** `genotype` depends only on its own sample. This is
 the payoff of measuring copy number against an absolute baseline, and it is worth

@@ -46,6 +46,15 @@ across two disjoint cohorts that share no donor with the HPRC overlap.
 [`validation/jogo_crosscheck.md`](validation/jogo_crosscheck.md) has the numbers
 and the one claim that exercise does *not* support.
 
+## Just the copy number, on any cluster
+
+[`portable/lilr_cn.py`](portable/README.md) is the copy-number half of this
+pipeline as a single file whose only dependency is `samtools`: no Snakemake, no
+conda environment, no scheduler, no panels. It emits the same calls — a drift
+test holds every constant and decision in lockstep with `src/lilrwgs/`, and on
+the 100-sample cohort both were run against, the two agree on all 300 calls.
+Allele sequences still need the full pipeline.
+
 ## Why srWGS changes the problem
 
 | | capture (`lilr-genotyper`) | srWGS 30× (here) |
