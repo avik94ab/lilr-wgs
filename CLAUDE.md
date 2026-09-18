@@ -54,7 +54,7 @@ python -m lilrwgs.genotype HG00096 LILRB1 results/reads/HG00096 \
 CRAM ─► [process_sample] ─► coverage model, CN, per-gene reads
               └─► [genotype] ×11 ─► [summary]      [cohort_scale] (a leaf)
 
-CRAM ─► [realign] ─► GRCh38 BAM ─► same coverage model, same CN ─► LILRA6
+CRAM ─► [realign] ─► GRCh38 BAM ─► same coverage model, same CN ─► LILRA6 only
         (scripts/lilra6_cn.py — a second front end, not a second pipeline)
 ```
 
@@ -67,6 +67,15 @@ GRCh38 coordinates and do not care which aligner made it, which is exactly why
 the two are comparable and why `validation/compare_realign.py` can compare them.
 Do not fork the copy-number logic to serve the second path — if realigned input
 needs different thresholds, the thresholds were wrong.
+
+**The realign path reports LILRA6 and only LILRA6**, via `cn.call_lilra6`. That
+is a deliberate narrowing, not an unfinished feature. LILRB3 is still measured
+inside it because LILRA6's only independent check is the pooled LILRA6+LILRB3
+depth. LILRA3 is not measured at all: its depth route cannot survive a regional
+extraction (PLAN.md §12), and its junction route scores 97/100 where the
+CRAM-as-is path scores 100/100 — a number this path calls less well than the
+path beside it is worse than no number. If you add a gene here, say what it
+scores against `cn_calls.tsv` first.
 
 `src/lilrwgs/` is an importable package; `scripts/` holds drivers; `workflow/`
 holds only the DAG. Pure logic (`depth_model`, the fitting functions in

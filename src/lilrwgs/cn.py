@@ -272,6 +272,32 @@ def call_sample(sample: str, bam: str, model: CoverageModel, *,
     return calls
 
 
+def call_lilra6(sample: str, bam: str, model: CoverageModel, *,
+                reference: str | None = None, samtools: str = "samtools",
+                ) -> CNCall:
+    """LILRA6 alone, with its cross-check and nothing else.
+
+    LILRB3 is measured and then discarded, which is not waste: LILRA6's only
+    independent check is the pooled LILRA6+LILRB3 depth at MAPQ 0 minus LILRB3
+    from its unique window, so dropping LILRB3 would not save a measurement, it
+    would remove the check. What the pair check finds goes into the returned
+    call's ``support`` and ``notes``.
+
+    LILRA3 is not touched at all. On a BAM built by realigning a regional
+    extraction its depth route is invalid and its junction route is materially
+    weaker than the CRAM-as-is path — 97/100 against 100/100, and wrong in a
+    direction that turns heterozygotes into homozygotes. Reporting a number that
+    this path calls less well than the path next to it is worse than reporting
+    none, so :func:`call_sample` remains where LILRA3 is called.
+    """
+    a6 = _call_unique_window(sample, "LILRA6", bam, model,
+                             reference=reference, samtools=samtools)
+    b3 = _call_unique_window(sample, "LILRB3", bam, model,
+                             reference=reference, samtools=samtools)
+    _pair_check([a6, b3], bam, model, reference=reference, samtools=samtools)
+    return a6
+
+
 def _call_unique_window(sample: str, gene: str, bam: str, model: CoverageModel,
                         *, reference: str | None, samtools: str) -> CNCall:
     call = CNCall(sample=sample, gene=gene, method="unique_window_q20")

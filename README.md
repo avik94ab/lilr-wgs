@@ -145,8 +145,11 @@ qsub -t 1-25 scripts/lilra6_array.sh inputs.txt results/lilra6   # or on SGE
 
 `--inputs` is one sample per line, with one, two or three whitespace-separated
 columns: the CRAM alone, the CRAM and its index, or an explicit sample name
-followed by both. Output is LILRA6 copy number; LILRB3 and LILRA3 land in a
-companion file, since LILRA6's cross-check is the pooled LILRA6+LILRB3 depth.
+followed by both. Output is one row per sample, LILRA6 and nothing else.
+
+LILRB3 is still measured internally, because LILRA6's only independent check is
+the pooled LILRA6+LILRB3 depth — dropping it would not save a measurement, it
+would remove the check. LILRA3 is not measured at all here; see below.
 
 Nothing downstream changed. `coverage.measure` and `cn.call_sample` take a BAM
 in GRCh38 coordinates and do not care which aligner produced it, so the copy
@@ -162,27 +165,26 @@ one step differs.
 | gene | integer agreement | median Δestimate | worst Δ |
 |---|---|---|---|
 | **LILRA6** | **100/100 (100%)** | +0.0000 | 0.0030 |
-| LILRB3 | **100/100 (100%)** | +0.0000 | 0.0010 |
-| LILRA3, via the junction | 97/100 (97.0%) | +0.0630 | +0.6130 |
+| LILRB3 (measured, not reported) | 100/100 (100%) | +0.0000 | 0.0010 |
 
-All 300 calls `measured`, every sample `alt_aware`, nothing refused. This is a
+Every call `measured`, every sample `alt_aware`, nothing refused. This is a
 plumbing test rather than a validation: the realignment targets the index the
 input was aligned against, so what it rules out is that extraction, collation,
 re-pairing or singleton handling lost reads — not that the pipeline works on an
 input aligned to something else. Against truth, `validation/` remains the score.
 PLAN.md §12 has the detail.
 
-**LILRA3 is the exception, and it is not a small one.** Its depth route counts
-MAPQ-0 alt-contig depth including supplementary records, and on HG00138 135 of
-the 964 reads with an alt-contig record have no primary in the LRC at all —
-their primaries are scattered across chr2, chr3, chrX, repeat-derived reads with
-a supplementary hit on the LILRA3 contigs. A regional extraction cannot hold
-them, so realigning loses 21% of that depth and reads true CN 2 as CN 1. The
-realign path therefore calls LILRA3 from the deletion junction instead, which is
-unaffected — but the junction is weakest at heterozygotes, and the three
-residual errors are all CN 1 read as CN 2. **Where the input is a GRCh38
-ALT-aware CRAM, the as-is path is the better LILRA3 caller.** This path exists
-for inputs where that is not available.
+**Why LILRA3 is not reported here.** It was, and it was wrong. Its depth route
+counts MAPQ-0 alt-contig depth including supplementary records, and on HG00138
+135 of the 964 reads with an alt-contig record have no primary in the LRC at all
+— their primaries are scattered across chr2, chr3, chrX, repeat-derived reads
+with a supplementary hit on the LILRA3 contigs. A regional extraction cannot
+hold them, so realigning loses 21% of that depth and reads true CN 2 as CN 1.
+Routing it through the deletion junction instead recovers 78.4% → 97.0%, but the
+junction is weakest exactly at heterozygotes, and all three residual errors are
+CN 1 read as CN 2. **The CRAM-as-is path calls LILRA3 at 100/100 on the same
+samples, so reporting the weaker number next to it would be worse than reporting
+none.** `cn.call_sample` is where LILRA3 is called.
 
 Two further limits. The extraction is only as complete as the alignment it
 reads from, so a read the input aligner put outside these intervals is not there

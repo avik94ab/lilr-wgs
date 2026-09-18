@@ -29,11 +29,25 @@ import csv
 from collections import Counter
 from pathlib import Path
 
+# The gene a table with no `gene` column is understood to hold.
+DEFAULT_GENE = "LILRA6"
+
 
 def read_calls(path: Path, gene: str) -> dict[str, dict]:
-    """``{sample: row}`` for one gene, from either output's TSV layout."""
+    """``{sample: row}`` for one gene, from either output's TSV layout.
+
+    Two layouts, because the two sides of this comparison are shaped
+    differently. `cn_calls.tsv` is long — one row per sample *and gene*, with a
+    `gene` column to select on. `lilra6_cn.py` emits one row per sample and no
+    `gene` column at all, since it reports one gene. A file with no `gene`
+    column is taken to be that gene throughout, which is checked rather than
+    assumed: selecting LILRB3 out of a LILRA6-only table has to come back empty
+    rather than come back as LILRA6.
+    """
     with path.open() as fh:
         rows = list(csv.DictReader(fh, delimiter="\t"))
+    if rows and "gene" not in rows[0]:
+        return {r["sample"]: r for r in rows} if gene == DEFAULT_GENE else {}
     return {r["sample"]: r for r in rows if r.get("gene") == gene}
 
 
@@ -57,7 +71,7 @@ def main() -> int:
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--realigned", type=Path, required=True)
     p.add_argument("--as-is", type=Path, required=True)
-    p.add_argument("--gene", default="LILRA6")
+    p.add_argument("--gene", default=DEFAULT_GENE)
     p.add_argument("--disagreements", type=Path,
                    help="write the disagreeing samples here as a TSV")
     args = p.parse_args()

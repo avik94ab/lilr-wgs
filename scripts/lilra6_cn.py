@@ -24,13 +24,19 @@ Here the LRC and the control loci are pulled out of whatever alignment they
 arrived in and realigned against the analysis set with its alt index, so
 ALT-awareness is a property of this pipeline rather than of the input.
 
-What comes out is LILRA6, and `status` is not decoration: a failed measurement
-and a true zero are different values. LILRA6 CN 0 is real and rare, and if the
-realignment is not ALT-aware every MAPQ-20 window in the cluster reads near zero
-for every sample alike — so that case is reported `not_measured` and left empty,
-never filled in as 0. LILRB3 and LILRA3 are measured too, because LILRA6's
-cross-check is the pooled LILRA6+LILRB3 depth, and they are written to a
-companion file rather than thrown away.
+What comes out is LILRA6 and only LILRA6, one row per sample.
+
+`status` is not decoration: a failed measurement and a true zero are different
+values. LILRA6 CN 0 is real and rare, and if the realignment is not ALT-aware
+every MAPQ-20 window in the cluster reads near zero for every sample alike — so
+that case is reported `not_measured` and left empty, never filled in as 0.
+
+LILRB3 is still measured internally, because LILRA6's only independent check is
+the pooled LILRA6+LILRB3 depth; it is not reported. LILRA3 is not measured at
+all. Its depth route cannot survive a regional extraction — the reads it counts
+have their primaries scattered genome-wide — and its junction route, while
+usable, is materially weaker here than on a CRAM slice. `cn.call_sample` is
+where LILRA3 is called, from the CRAM as-is. See PLAN.md §12.
 """
 
 from __future__ import annotations
@@ -59,7 +65,7 @@ SAMPLE_SUFFIXES = (".final.cram", ".slice.bam", ".cram", ".bam", ".sam")
 HEADER_TOKENS = {"sample", "sample_id", "cram", "crai", "bam", "bai", "index"}
 
 OUTPUT_FIELDS = [
-    "sample", "gene", "copies", "estimate", "confidence", "status",
+    "sample", "copies", "estimate", "confidence", "status",
     "ambiguous", "method", "lambda1", "mean_depth", "alt_verdict",
     "n_pairs", "notes",
     # The raw counts the call was made from. Carried for the same reason
@@ -148,46 +154,39 @@ def call_one(row: dict, reference: str, bwa_index: str, outdir: Path,
         # which is what makes the ratio a copy number rather than a comparison
         # between two pipelines' losses.
         model = coverage.measure(sample, str(bam), reference=reference)
-        # alt_depth_valid=False: this BAM was built by extracting the LRC and
-        # realigning it, so it cannot hold the genome-wide reads whose
-        # supplementary alignments the LILRA3 alt-depth route counts. LILRA3
-        # comes from the junction assay here. See cn._call_lilra3.
-        calls = cn.call_sample(sample, str(bam), model, reference=reference,
-                               alt_depth_valid=False)
-
-        rows = []
-        for call in calls:
-            r = call.as_row()
-            rows.append({
-                "sample": sample,
-                "gene": r["gene"],
-                "copies": r["copies"],
-                "estimate": r["estimate"],
-                "confidence": r["confidence"],
-                "status": r["status"],
-                "ambiguous": r["ambiguous"],
-                "method": r["method"],
-                "lambda1": round(model.lambda1, 2),
-                "mean_depth": call.support.get("mean_depth", ""),
-                "alt_verdict": model.alt_verdict,
-                "n_pairs": stats.n_pairs,
-                "notes": ";".join(filter(None, [r["notes"]] + stats.warnings)),
-                "support": r["support"],
-            })
-        return {"sample": sample, "ok": True, "rows": rows,
+        call = cn.call_lilra6(sample, str(bam), model, reference=reference)
+        r = call.as_row()
+        row = {
+            "sample": sample,
+            "copies": r["copies"],
+            "estimate": r["estimate"],
+            "confidence": r["confidence"],
+            "status": r["status"],
+            "ambiguous": r["ambiguous"],
+            "method": r["method"],
+            "lambda1": round(model.lambda1, 2),
+            "mean_depth": call.support.get("mean_depth", ""),
+            "alt_verdict": model.alt_verdict,
+            "n_pairs": stats.n_pairs,
+            "notes": ";".join(filter(None, [r["notes"]] + stats.warnings)),
+            "support": r["support"],
+        }
+        return {"sample": sample, "ok": True, "row": row,
                 "realign": stats.as_row(), "coverage": model.as_row(),
                 "elapsed_s": round(time.time() - started, 1)}
 
     except (ToolError, OSError, ValueError) as exc:
+        # A row, not a gap. A sample missing from the output is indistinguishable
+        # from one nobody asked for; `failed` with an empty `copies` is a third
+        # thing, distinct from both a measurement and a zero.
         return {
             "sample": sample, "ok": False, "error": str(exc)[:600],
             "elapsed_s": round(time.time() - started, 1),
-            "rows": [{"sample": sample, "gene": g, "copies": "", "estimate": "",
-                      "confidence": 0.0, "status": "failed", "ambiguous": False,
-                      "method": "", "lambda1": "", "mean_depth": "",
-                      "alt_verdict": "", "n_pairs": "", "support": "",
-                      "notes": str(exc)[:200].replace("\n", " ")}
-                     for g in ("LILRA6", "LILRB3", "LILRA3")],
+            "row": {"sample": sample, "copies": "", "estimate": "",
+                    "confidence": 0.0, "status": "failed", "ambiguous": False,
+                    "method": "", "lambda1": "", "mean_depth": "",
+                    "alt_verdict": "", "n_pairs": "", "support": "",
+                    "notes": str(exc)[:200].replace("\n", " ")},
         }
     finally:
         # Always: when --keep-realigned is set the BAM is written under outdir,
@@ -210,10 +209,7 @@ def main() -> int:
                    help="bwa index base; defaults to --reference. "
                         "{base}.alt must exist or LILRA6 is refused")
     p.add_argument("-o", "--output", type=Path, required=True,
-                   help="LILRA6 copy number, TSV")
-    p.add_argument("--all-genes-output", type=Path,
-                   help="LILRB3 and LILRA3 as well; defaults to "
-                        "<output>.all_genes.tsv")
+                   help="LILRA6 copy number, TSV, one row per sample")
     p.add_argument("--threads", type=int, default=8,
                    help="threads per sample, for bwa and samtools (default 8)")
     p.add_argument("--jobs", type=int, default=1,
@@ -236,10 +232,10 @@ def main() -> int:
                 f"{bwa_index}{ext}: not found — the bwa index is incomplete.\n"
                 "Run scripts/fetch_bwa_index.sh")
     if not realign.index_is_alt_aware(bwa_index):
-        # Not fatal, because the run still produces a correct LILRA3 call and an
-        # honest `not_measured` for LILRA6. But it is the single mistake that
-        # turns this cohort into a cohort of apparent deletion homozygotes, so
-        # it is said once, loudly, before any work happens.
+        # Not fatal — every call comes back an honest `not_measured` rather than
+        # a wrong number. But it is the single mistake that turns a cohort into
+        # apparent deletion homozygotes, and bwa reports it nowhere, so it is
+        # said once, loudly, before any work happens.
         print(f"WARNING: {bwa_index}.alt is missing. The realignment will not "
               "be ALT-aware and every LILRA6 call will be `not_measured`.\n"
               "         Run scripts/fetch_bwa_index.sh.", file=sys.stderr)
@@ -247,8 +243,6 @@ def main() -> int:
     rows = read_inputs(args.inputs)
     args.outdir.mkdir(parents=True, exist_ok=True)
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    all_out = args.all_genes_output or args.output.with_suffix(
-        args.output.suffix + ".all_genes.tsv")
 
     print(f"{len(rows)} samples, {args.jobs} x {args.threads} threads, "
           f"realigning against {bwa_index}", file=sys.stderr)
@@ -274,15 +268,11 @@ def main() -> int:
             _progress(i, len(rows), res)
 
     results.sort(key=lambda r: r["sample"])
-    lilra6 = [row for res in results for row in res["rows"]
-              if row["gene"] == "LILRA6"]
-    others = [row for res in results for row in res["rows"]
-              if row["gene"] != "LILRA6"]
+    lilra6 = [res["row"] for res in results]
 
     _write_tsv(args.output, lilra6)
-    _write_tsv(all_out, others)
     (args.outdir / "qc.json").write_text(json.dumps(
-        [{k: v for k, v in r.items() if k != "rows"} for r in results],
+        [{k: v for k, v in r.items() if k != "row"} for r in results],
         indent=2, sort_keys=True))
 
     n_failed = sum(1 for r in results if not r["ok"])
@@ -296,8 +286,7 @@ def main() -> int:
             dist[r["copies"]] = dist.get(r["copies"], 0) + 1
         print("  LILRA6 CN: " + ", ".join(f"{k}:{dist[k]}" for k in sorted(dist)),
               file=sys.stderr)
-    print(f"  {args.output}\n  {all_out}\n  {args.outdir / 'qc.json'}",
-          file=sys.stderr)
+    print(f"  {args.output}\n  {args.outdir / 'qc.json'}", file=sys.stderr)
     # A failed sample is a row in the output, not an exit code -- but a run where
     # everything failed is a configuration problem and should not look like a
     # success to a scheduler.
@@ -306,9 +295,8 @@ def main() -> int:
 
 def _progress(i: int, total: int, res: dict) -> None:
     if res["ok"]:
-        a6 = next((r for r in res["rows"] if r["gene"] == "LILRA6"), {})
-        detail = (f"LILRA6={a6.get('copies')} ({a6.get('status')})"
-                  if a6 else "no call")
+        row = res["row"]
+        detail = f"LILRA6={row['copies']} ({row['status']})"
     else:
         detail = f"FAILED: {res['error'].splitlines()[0][:70]}"
     print(f"  [{i}/{total}] {res['sample']}: {detail} "

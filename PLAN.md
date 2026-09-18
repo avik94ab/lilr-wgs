@@ -486,6 +486,10 @@ All 300 calls `measured`, every sample `alt_aware`, no status changes, nothing r
 LILRA6 distribution is identical sample by sample, not merely in aggregate: 0:1 1:2 2:62
 3:32 4:3 on both sides.
 
+That table is what the run measured. What the tool now **reports** is LILRA6 alone, through
+`cn.call_lilra6`: LILRB3 is measured for the pair check and not emitted, and LILRA3 is not
+measured at all. The next subsection is why.
+
 **This is a plumbing test, not a validation.** The realignment targets the index the input
 was aligned against, so near-identical placement is the expected result and what it rules
 out is that extraction, collation, re-pairing, singleton handling or the `-Y`/`-K` settings
@@ -523,10 +527,16 @@ realigned junction estimate reads:
 | 2 | 59 | 2.000 | 2.000 | 2.000 |
 
 CN 0 and CN 2 are exact; CN 1 sits at 1.157 against the 1.12 recorded in `cn.py`, and its
-upper tail crosses the 1.5 rounding boundary three times. **LILRA3 from the realign path is
-therefore not equivalent to LILRA3 from a CRAM slice, and should not be reported as
-though it were.** Where the input is a GRCh38 ALT-aware CRAM, the as-is path is the better
-LILRA3 caller; the realign path exists for inputs where it is not available.
+upper tail crosses the 1.5 rounding boundary three times.
+
+So LILRA3 from the realign path is not equivalent to LILRA3 from a CRAM slice — 97/100
+against 100/100, wrong in the direction that turns heterozygotes into homozygotes. Rather
+than ship it with a caveat, `scripts/lilra6_cn.py` stopped reporting it: a number this path
+calls less well than the path beside it is worse than no number, and a caveat in a README
+does not travel with a TSV. `cn.call_sample` is where LILRA3 is called, from the CRAM
+as-is. The knowledge is kept where it can still bite — `alt_depth_valid` remains on
+`call_sample`, defaulting to the correct value for a CRAM slice, so anyone who does point
+it at a realigned BAM gets the junction route rather than a silent 21% shortfall.
 
 ### Cost
 

@@ -156,6 +156,51 @@ class TestBwaArgs:
         assert "-K" in realign.BWA_ARGS
 
 
+class TestLilra6IsTheOnlyThingReported:
+    """`call_lilra6` returns one call, and it is not a reduced `call_sample`.
+
+    LILRB3 is still measured, because LILRA6's only independent check is the
+    pooled LILRA6+LILRB3 depth — dropping it would not save a measurement, it
+    would remove the check. LILRA3 is not measured at all: on a realigned BAM its
+    depth route is invalid and its junction route is materially weaker than the
+    CRAM-as-is path, and a number this path calls less well than the path beside
+    it is worse than no number.
+    """
+
+    def test_returns_only_lilra6(self, monkeypatch):
+        from lilrwgs import cn
+
+        monkeypatch.setattr(cn, "_mean_depth", lambda *a, **k: (30.0, 2900))
+        call = cn.call_lilra6("S", "x.bam", _model_with_controls())
+        assert isinstance(call, cn.CNCall)
+        assert call.gene == "LILRA6"
+
+    def test_lilra3_is_never_touched(self, monkeypatch):
+        """No junction query, no alt-contig depth, no LILRA3 call."""
+        from lilrwgs import cn
+
+        monkeypatch.setattr(cn, "_mean_depth", lambda *a, **k: (30.0, 2900))
+        monkeypatch.setattr(cn, "junction_counts", _fail_if_called)
+        cn.call_lilra6("S", "x.bam", _model_with_controls())
+
+    def test_the_pair_check_still_runs(self, monkeypatch):
+        """LILRB3 is measured for the cross-check even though it is not
+        reported — the evidence lands in LILRA6's own support."""
+        from lilrwgs import cn
+
+        seen: list = []
+        monkeypatch.setattr(cn, "_mean_depth",
+                            lambda b, iv, q, **k: seen.append(iv) or (30.0, 2900))
+        cn.call_lilra6("S", "x.bam", _model_with_controls())
+        flat = [iv for group in seen for iv in group]
+        assert any(s == loci.UNIQUE_WINDOWS["LILRB3"][0][1] for _, s, _ in flat), \
+            "LILRB3's unique window was never measured, so the pair check is gone"
+
+
+def _fail_if_called(*args, **kwargs):
+    raise AssertionError("LILRA3's machinery ran in the LILRA6-only path")
+
+
 class TestLilra3RouteOnRealignedBams:
     """A realigned BAM cannot support LILRA3's alt-contig depth route.
 
@@ -213,11 +258,20 @@ class TestLilra3RouteOnRealignedBams:
 
 
 def _model_with_controls():
-    """A CoverageModel with enough MAPQ-0 control depth to normalise on."""
+    """A healthy CoverageModel: live λ₁, live MAPQ-20 in the LRC, controls to
+    normalise a MAPQ-0 ratio on.
+
+    `q20_lrc` has to be set or `usable_mapq20` is False and every unique-window
+    call returns `not_measured` before it measures anything — which makes a test
+    that asserts a measurement happened pass for the wrong reason.
+    """
     from lilrwgs.coverage import ControlMeasurement, CoverageModel
 
     model = CoverageModel(sample="S")
     model.lambda1 = 15.0
+    model.q20_lrc = 0.99
+    model.q20_outside = 0.99
+    model.alt_verdict = "alt_aware"
     model.controls = [
         ControlMeasurement(name=c.name, chrom=c.chrom, start=c.start, end=c.end,
                            inside_placement=c.inside_placement,

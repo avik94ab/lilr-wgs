@@ -43,10 +43,6 @@ command -v samtools >/dev/null || { echo "samtools not on PATH" >&2; exit 1; }
 # a whole array would burn its slots producing refusals.
 [ -s "$REFERENCE.alt" ] || { echo "$REFERENCE.alt missing; run scripts/fetch_bwa_index.sh" >&2; exit 1; }
 
-# Two output directories, not two filenames in one. The companion file's default
-# name is the main one plus a suffix, so any glob that matches `chunk.*.tsv`
-# matches both and a merge silently doubles the table with the wrong genes in it.
-#
 # Retried, because `mkdir -p` is not reliably idempotent across nodes on a
 # parallel filesystem and neither is the `-d` test that would check it. 25 array
 # tasks starting at once all raced to create these: on the first run three lost
@@ -59,9 +55,9 @@ command -v samtools >/dev/null || { echo "samtools not on PATH" >&2; exit 1; }
 # So: try, sleep, look again. A directory that is genuinely uncreatable (no
 # permission, full quota) still fails loudly after the last attempt.
 for attempt in 1 2 3 4 5; do
-    mkdir -p "$OUTDIR/parts" "$OUTDIR/all_genes" logs 2>/dev/null || true
+    mkdir -p "$OUTDIR/parts" logs 2>/dev/null || true
     missing=""
-    for d in "$OUTDIR/parts" "$OUTDIR/all_genes" logs; do
+    for d in "$OUTDIR/parts" logs; do
         [ -d "$d" ] || missing="$missing $d"
     done
     [ -z "$missing" ] && break
@@ -71,6 +67,7 @@ for attempt in 1 2 3 4 5; do
     fi
     sleep $(( attempt * 2 ))
 done
+
 first=$(( (SGE_TASK_ID - 1) * CHUNK + 1 ))
 last=$(( first + CHUNK - 1 ))
 part="$OUTDIR/parts/chunk.$(printf '%04d' "$SGE_TASK_ID")"
@@ -91,5 +88,4 @@ python3 scripts/lilra6_cn.py \
     --threads "${NSLOTS:-8}" \
     --jobs 1 \
     --outdir "$OUTDIR/qc/$(printf '%04d' "$SGE_TASK_ID")" \
-    -o "$part.tsv" \
-    --all-genes-output "$OUTDIR/all_genes/chunk.$(printf '%04d' "$SGE_TASK_ID").tsv"
+    -o "$part.tsv"
