@@ -1,0 +1,23 @@
+name	kind	chrom	start	end	strand	note
+CACNG6	control_outside	chr19	57069638	57091148	+	
+LILRA1	gene	chr19	57687146	57695896	+	
+LILRA2	gene	chr19	57666504	57683802	+	
+LILRA4	gene	chr19	57422955	57428933	-	
+LILRA5	gene	chr19	57396883	57402937	-	
+LILRA6	gene	chr19	57316984	57323158	-	
+LILRB1	gene	chr19	57709826	57731530	+	
+LILRB2	gene	chr19	57356203	57363500	-	
+LILRB3	gene	chr19	57296665	57303395	-	
+LILRB4	gene	chr19	57756497	57762244	+	
+LILRB5	gene	chr19	57331817	57340006	-	
+MBOAT7	control_inside	chr19	57253614	57269968	-	
+PPP6R1	control_outside	chr19	58322177	58352962	-	
+PRKCG	control_outside	chr19	56960798	56987358	+	
+PRPF31	control_inside	chr19	57194450	57210410	+	
+TMC4	control_inside	chr19	57240373	57253360	-	
+TTYH1	control_inside	chr19	57508740	57530183	+	
+LILRA3	gene	chr19	57377083	57384209	-	located by alignment, identity 1.0000
+LILRA6_unique_1	unique_window	chr19	57316984	57319070	-	2086 bp, transferred at identity 1.0000, 0.0% ambiguous by the 100-mer audit
+LILRA6_unique_2	unique_window	chr19	57319444	57320258	-	814 bp, transferred at identity 0.9975, 0.0% ambiguous by the 100-mer audit
+LILRB3_unique_1	unique_window	chr19	57296847	57297439	-	592 bp, transferred at identity 1.0000, 0.4% ambiguous by the 100-mer audit
+LILRB3_unique_2	unique_window	chr19	57298639	57299928	-	1289 bp, transferred at identity 0.9984, 0.0% ambiguous by the 100-mer audit
