@@ -333,6 +333,7 @@ def measure(
     reference: str | os.PathLike | None = None,
     samtools: str = "samtools",
     with_gc: bool = True,
+    loci_mod=loci,
 ) -> CoverageModel:
     """Build the coverage model for one sample from its local slice.
 
@@ -342,16 +343,23 @@ def measure(
             :func:`lilrwgs.loci.slice_regions` rather than the extraction
             regions alone.
         reference: needed only to compute the GC curve.
+        loci_mod: the coordinate table `bam` is expressed in —
+            :mod:`lilrwgs.loci` for GRCh38, :mod:`lilrwgs.loci_chm13` for
+            CHM13v2.0. Passing the wrong one does not fail: both assemblies call
+            the chromosome chr19 and both coordinates exist, so the controls are
+            simply read ~3 Mb from where they live and λ₁ comes back as
+            whatever sequence happens to be there. The caller that opens the BAM
+            knows which reference made it; this argument is how it says so.
     """
     model = CoverageModel(sample=sample)
 
-    regions = [(c.chrom, c.start, c.end) for c in loci.ALL_CONTROLS]
-    q0 = _depth_by_region(bam, regions, loci.MAPQ_ANY,
+    regions = [(c.chrom, c.start, c.end) for c in loci_mod.ALL_CONTROLS]
+    q0 = _depth_by_region(bam, regions, loci_mod.MAPQ_ANY,
                           reference=reference, samtools=samtools)
-    q20 = _depth_by_region(bam, regions, loci.MAPQ_STRICT,
+    q20 = _depth_by_region(bam, regions, loci_mod.MAPQ_STRICT,
                            reference=reference, samtools=samtools)
 
-    for control in loci.ALL_CONTROLS:
+    for control in loci_mod.ALL_CONTROLS:
         key = f"{control.chrom}:{control.start}-{control.end}"
         d0, d20 = q0.get(key, []), q20.get(key, [])
         if not d20:

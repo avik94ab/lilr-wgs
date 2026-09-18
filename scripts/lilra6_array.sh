@@ -34,14 +34,28 @@ set -euo pipefail
 INPUTS=${1:?inputs list}
 OUTDIR=${2:?outdir}
 REFERENCE=${REFERENCE:-resources/reference/GRCh38_full_analysis_set_plus_decoy_hla.fa}
+# What to realign to. Defaults to REFERENCE, i.e. GRCh38. Set TARGET to
+# resources/reference/chm13v2.0.fa to measure in T2T coordinates, where LILRA3
+# is on the primary assembly rather than on four alt contigs.
+TARGET=${TARGET:-$REFERENCE}
 CHUNK=${CHUNK:-4}
 
 command -v bwa >/dev/null || { echo "bwa not on PATH" >&2; exit 1; }
 command -v samtools >/dev/null || { echo "samtools not on PATH" >&2; exit 1; }
+[ -s "$TARGET.bwt" ] || { echo "$TARGET.bwt missing; build or fetch the bwa index" >&2; exit 1; }
 # The failure with no error message. bwa does not report a missing .alt file; it
 # aligns without ALT-awareness and every LILRA6 call comes back not_measured, so
-# a whole array would burn its slots producing refusals.
-[ -s "$REFERENCE.alt" ] || { echo "$REFERENCE.alt missing; run scripts/fetch_bwa_index.sh" >&2; exit 1; }
+# a whole array would burn its slots producing refusals. Only GRCh38 has ALT
+# contigs -- on CHM13 the file's absence is correct, not a misconfiguration.
+#
+# Which assembly this is comes from chr19's length in the .fai, not from the
+# filename: renaming chm13v2.0.fa must not be able to change what it is measured
+# as, and lilrwgs.realign.assembly_of_reference decides it the same way.
+[ -s "$TARGET.fai" ] || { echo "$TARGET.fai missing; samtools faidx it" >&2; exit 1; }
+CHR19_LEN=$(awk -F'\t' '$1=="chr19"{print $2}' "$TARGET.fai")
+if [ "$CHR19_LEN" = "58617616" ]; then
+    [ -s "$TARGET.alt" ] || { echo "$TARGET.alt missing; run scripts/fetch_bwa_index.sh" >&2; exit 1; }
+fi
 
 # Retried, because `mkdir -p` is not reliably idempotent across nodes on a
 # parallel filesystem and neither is the `-d` test that would check it. 25 array
@@ -85,6 +99,7 @@ export PYTHONPATH="src${PYTHONPATH:+:$PYTHONPATH}"
 python3 scripts/lilra6_cn.py \
     --inputs "$part.inputs.txt" \
     --reference "$REFERENCE" \
+    --target "$TARGET" \
     --threads "${NSLOTS:-8}" \
     --jobs 1 \
     --outdir "$OUTDIR/qc/$(printf '%04d' "$SGE_TASK_ID")" \

@@ -67,7 +67,7 @@ HEADER_TOKENS = {"sample", "sample_id", "cram", "crai", "bam", "bai", "index"}
 OUTPUT_FIELDS = [
     "sample", "copies", "estimate", "confidence", "status",
     "ambiguous", "method", "lambda1", "mean_depth", "alt_verdict",
-    "n_pairs", "notes",
+    "assembly", "n_pairs", "notes",
     # The raw counts the call was made from. Carried for the same reason
     # `cn.CNCall.as_row` carries it: a copy number without its evidence cannot be
     # re-adjudicated later, and in this cluster the calls that need
@@ -129,7 +129,8 @@ def read_inputs(path: Path) -> list[dict]:
 
 
 def call_one(row: dict, reference: str, bwa_index: str, outdir: Path,
-             threads: int, keep_bam: bool) -> dict:
+             threads: int, keep_bam: bool, target_assembly: str = "GRCh38",
+             target: str | None = None) -> dict:
     """One sample, end to end. Returns a status dict; never raises.
 
     Never raises because a cohort is a list of independent samples and one
@@ -153,8 +154,20 @@ def call_one(row: dict, reference: str, bwa_index: str, outdir: Path,
         # window depth are measured in the same units on the same alignment --
         # which is what makes the ratio a copy number rather than a comparison
         # between two pipelines' losses.
-        model = coverage.measure(sample, str(bam), reference=reference)
-        call = cn.call_lilra6(sample, str(bam), model, reference=reference)
+        #
+        # Both the coordinate table and the FASTA are the *target's*, not the
+        # input's. The table because the BAM is in the target's coordinates; the
+        # FASTA because the GC correction reads sequence at the control loci to
+        # build the curve, and reading it from the wrong assembly would correct
+        # λ₁ by the GC of the wrong 3 Mb. Passing None there does not error --
+        # it silently drops the correction, which config.yaml turns on because
+        # the LILR genes are not at the genomic mean GC.
+        target_loci = realign.LOCI_BY_ASSEMBLY[target_assembly]
+        model = coverage.measure(sample, str(bam), reference=target or bwa_index,
+                                 loci_mod=target_loci)
+        call = cn.call_lilra6(sample, str(bam), model,
+                              reference=target or bwa_index,
+                              loci_mod=target_loci)
         r = call.as_row()
         row = {
             "sample": sample,
@@ -167,6 +180,7 @@ def call_one(row: dict, reference: str, bwa_index: str, outdir: Path,
             "lambda1": round(model.lambda1, 2),
             "mean_depth": call.support.get("mean_depth", ""),
             "alt_verdict": model.alt_verdict,
+            "assembly": target_assembly,
             "n_pairs": stats.n_pairs,
             "notes": ";".join(filter(None, [r["notes"]] + stats.warnings)),
             "support": r["support"],
@@ -185,7 +199,8 @@ def call_one(row: dict, reference: str, bwa_index: str, outdir: Path,
             "row": {"sample": sample, "copies": "", "estimate": "",
                     "confidence": 0.0, "status": "failed", "ambiguous": False,
                     "method": "", "lambda1": "", "mean_depth": "",
-                    "alt_verdict": "", "n_pairs": "", "support": "",
+                    "alt_verdict": "", "assembly": "", "n_pairs": "",
+                    "support": "",
                     "notes": str(exc)[:200].replace("\n", " ")},
         }
     finally:
@@ -203,11 +218,15 @@ def main() -> int:
                    help="list file of CRAM/BAM paths or URLs, optional index "
                         "and sample-name columns")
     p.add_argument("--reference", type=Path, required=True,
-                   help="the GRCh38 analysis-set FASTA the CRAMs were "
-                        "compressed against")
+                   help="the FASTA the input CRAMs were compressed against, "
+                        "needed to decode them; unused for BAM input")
+    p.add_argument("--target", type=Path,
+                   help="the reference to realign to, and the bwa index base. "
+                        "Defaults to --reference. Point it at chm13v2.0.fa to "
+                        "measure in T2T coordinates, where LILRA3 is on the "
+                        "primary assembly")
     p.add_argument("--bwa-index", type=Path,
-                   help="bwa index base; defaults to --reference. "
-                        "{base}.alt must exist or LILRA6 is refused")
+                   help="bwa index base, if it is not beside --target")
     p.add_argument("-o", "--output", type=Path, required=True,
                    help="LILRA6 copy number, TSV, one row per sample")
     p.add_argument("--threads", type=int, default=8,
@@ -222,16 +241,30 @@ def main() -> int:
     args = p.parse_args()
 
     reference = args.reference.resolve()
-    bwa_index = (args.bwa_index or args.reference).resolve()
+    target = (args.target or args.reference).resolve()
+    bwa_index = (args.bwa_index or target).resolve()
 
     if not reference.exists():
         raise SystemExit(f"{reference}: not found; run scripts/fetch_reference.sh")
+    if not target.exists():
+        raise SystemExit(f"{target}: not found; "
+                         "run scripts/fetch_t2t_reference.sh for CHM13")
+
+    # Which coordinate table the realigned BAM will be expressed in. Read from
+    # the target's own .fai rather than inferred from its filename, and the
+    # single most important thing to get right here: GRCh38 and CHM13 both call
+    # the chromosome chr19, so measuring a CHM13 BAM with GRCh38 intervals does
+    # not fail, it reads sequence ~3 Mb away and reports copy number for it.
+    target_assembly, target_loci = realign.assembly_of_reference(target)
     for ext in (".bwt", ".pac", ".sa", ".ann", ".amb"):
         if not Path(str(bwa_index) + ext).exists():
             raise SystemExit(
                 f"{bwa_index}{ext}: not found — the bwa index is incomplete.\n"
                 "Run scripts/fetch_bwa_index.sh")
-    if not realign.index_is_alt_aware(bwa_index):
+    # Only GRCh38 has ALT contigs, so only GRCh38 needs the .alt file. On CHM13
+    # its absence is correct rather than a misconfiguration, and warning about it
+    # would train people to ignore the warning that matters.
+    if target_assembly == "GRCh38" and not realign.index_is_alt_aware(bwa_index):
         # Not fatal — every call comes back an honest `not_measured` rather than
         # a wrong number. But it is the single mistake that turns a cohort into
         # apparent deletion homozygotes, and bwa reports it nowhere, so it is
@@ -245,7 +278,7 @@ def main() -> int:
     args.output.parent.mkdir(parents=True, exist_ok=True)
 
     print(f"{len(rows)} samples, {args.jobs} x {args.threads} threads, "
-          f"realigning against {bwa_index}", file=sys.stderr)
+          f"realigning against {target_assembly} ({bwa_index})", file=sys.stderr)
 
     results: list[dict] = []
     started = time.time()
@@ -253,7 +286,8 @@ def main() -> int:
         with ProcessPoolExecutor(max_workers=args.jobs) as pool:
             futures = {
                 pool.submit(call_one, r, str(reference), str(bwa_index),
-                            args.outdir, args.threads, args.keep_realigned): r
+                            args.outdir, args.threads, args.keep_realigned,
+                            target_assembly, str(target)): r
                 for r in rows
             }
             for i, fut in enumerate(as_completed(futures), 1):
@@ -263,7 +297,8 @@ def main() -> int:
     else:
         for i, r in enumerate(rows, 1):
             res = call_one(r, str(reference), str(bwa_index), args.outdir,
-                           args.threads, args.keep_realigned)
+                           args.threads, args.keep_realigned, target_assembly,
+                           str(target))
             results.append(res)
             _progress(i, len(rows), res)
 

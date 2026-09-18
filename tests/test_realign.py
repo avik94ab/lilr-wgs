@@ -56,6 +56,68 @@ class TestSourceAssembly:
         assert "chromosome 19" in str(exc.value)
 
 
+class TestChm13AsSourceAndTarget:
+    """CHM13 is a third assembly that also calls its chromosome `chr19`.
+
+    Every failure mode `source_assembly` exists to prevent applies again, and
+    harder: GRCh38 and CHM13 differ by ~3 Mb in this region, which is far enough
+    to land on a different LILR gene and close enough that every coordinate
+    still exists.
+    """
+
+    CHM13 = {"chr19": 61_707_364, "chr1": 248_387_328}
+
+    def test_chm13_is_recognised(self):
+        assert realign.source_assembly(self.CHM13) == ("CHM13v2.0", "chr19")
+
+    def test_chm13_gets_its_own_table(self):
+        from lilrwgs import loci_chm13
+        assert realign.LOCI_BY_ASSEMBLY["CHM13v2.0"] is loci_chm13
+
+    def test_grch37_is_still_refused(self):
+        """Known well enough to be named in the refusal, not to be used."""
+        assert "GRCh37" in realign.CHR19_LENGTH.values()
+        assert "GRCh37" not in realign.LOCI_BY_ASSEMBLY
+        with pytest.raises(ToolError):
+            realign.source_assembly(GRCH37)
+
+    def test_chm13_regions_come_from_the_chm13_table(self):
+        regions, has_alts = realign.resolve_regions(
+            self.CHM13, "chr19", loci_mod=realign.LOCI_BY_ASSEMBLY["CHM13v2.0"])
+        assert not has_alts        # CHM13 has no ALT contigs
+        starts = [int(r.split(":")[1].split("-")[0]) for r in regions]
+        # Every interval is in the CHM13 LRC neighbourhood, ~3 Mb right of
+        # GRCh38's. A GRCh38 coordinate leaking through would sit below 55 Mb.
+        assert all(s > 56_000_000 for s in starts), regions
+
+    def test_a_grch38_table_against_a_chm13_header_yields_nothing_usable(self):
+        """The mistake this is all guarding against, made deliberately.
+
+        GRCh38 intervals resolved against a CHM13 header do not error — chr19
+        exists and is long enough — so the only thing standing between that and
+        a plausible wrong copy number is picking the table by assembly.
+        """
+        regions, _ = realign.resolve_regions(self.CHM13, "chr19", loci_mod=loci)
+        starts = [int(r.split(":")[1].split("-")[0]) for r in regions]
+        assert regions and all(s < 56_000_000 for s in starts)
+
+    def test_assembly_of_reference_reads_the_fai(self, tmp_path):
+        fa = tmp_path / "ref.fa"
+        fa.write_text(">chr19\nACGT\n")
+        (tmp_path / "ref.fa.fai").write_text("chr19\t61707364\t7\t80\t81\n")
+        assembly, mod = realign.assembly_of_reference(fa)
+        from lilrwgs import loci_chm13
+        assert assembly == "CHM13v2.0" and mod is loci_chm13
+
+    def test_assembly_of_reference_needs_an_index(self, tmp_path):
+        """Identified from the .fai, never from the filename — renaming
+        chm13v2.0.fa must not be able to change what it is measured as."""
+        fa = tmp_path / "chm13v2.0.fa"
+        fa.write_text(">chr19\nACGT\n")
+        with pytest.raises(ToolError):
+            realign.assembly_of_reference(fa)
+
+
 class TestResolveRegions:
     def test_alt_contigs_included_when_present(self):
         regions, has_alts = realign.resolve_regions(GRCH38_ALTS, "chr19")

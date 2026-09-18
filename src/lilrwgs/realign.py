@@ -47,7 +47,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import loci
+from . import loci, loci_chm13
 from .extract import SUPPLEMENTARY, cram_env, read_contigs
 from .shell import ToolError, pipeline, require, run
 
@@ -59,6 +59,16 @@ from .shell import ToolError, pipeline, require, run
 CHR19_LENGTH = {
     58_617_616: "GRCh38",
     59_128_983: "GRCh37",
+    61_707_364: "CHM13v2.0",
+}
+
+# Which coordinate table describes each assembly. An assembly this pipeline can
+# read but has no table for is refused rather than approximated -- GRCh37 is in
+# CHR19_LENGTH so that it can be *named* in the refusal, not so that it can be
+# used.
+LOCI_BY_ASSEMBLY = {
+    "GRCh38": loci,
+    "CHM13v2.0": loci_chm13,
 }
 
 # Contig-name spellings for chromosome 19, in the order they are tried. UCSC
@@ -131,18 +141,20 @@ def source_assembly(contigs: dict[str, int]) -> tuple[str, str]:
     for name in CHR19_ALIASES:
         if name in contigs:
             assembly = CHR19_LENGTH.get(contigs[name], "")
-            if assembly == "GRCh38":
+            if assembly in LOCI_BY_ASSEMBLY:
                 return assembly, name
             if assembly:
                 raise ToolError(
-                    f"this file is aligned to {assembly}, and lilr-wgs's "
-                    f"intervals are GRCh38 coordinates.\n"
-                    f"  {name} is {contigs[name]:,} bp "
-                    f"(GRCh38 is {58_617_616:,})\n"
-                    "Chromosome 19 has the same name in both assemblies, so "
+                    f"this file is aligned to {assembly}, and lilr-wgs has no "
+                    f"interval table for it.\n"
+                    f"  {name} is {contigs[name]:,} bp; known assemblies are "
+                    + ", ".join(f"{a} ({ln:,})"
+                                for ln, a in sorted(CHR19_LENGTH.items())
+                                if a in LOCI_BY_ASSEMBLY) + "\n"
+                    "Chromosome 19 has the same name in every one of them, so "
                     "extracting anyway would return a different half-megabase "
                     "and call copy number on it. Lift the input over, or add a "
-                    f"{assembly} interval table to lilrwgs.loci."
+                    f"{assembly} interval table beside lilrwgs.loci_chm13."
                 )
             raise ToolError(
                 f"{name} is {contigs[name]:,} bp, which matches no assembly "
@@ -161,26 +173,54 @@ def source_assembly(contigs: dict[str, int]) -> tuple[str, str]:
 
 
 def resolve_regions(contigs: dict[str, int], chr19: str, *,
-                    include_alts: bool = True) -> tuple[list[str], bool]:
+                    include_alts: bool = True, loci_mod=loci,
+                    ) -> tuple[list[str], bool]:
     """The slice intervals, spelled the way this header spells them.
 
-    The coordinates are :mod:`lilrwgs.loci`'s and do not move; only the contig
-    names are the input's. Alt contigs are included when present and dropped
-    when not — a CRAM aligned to a primary-only or Ensembl-named reference has
-    none, which costs LILRA3's depth route and nothing else, so it is reported
-    rather than refused.
+    ``loci_mod`` is the table for the assembly the *input* is aligned to, which
+    is not necessarily the one being realigned to: reads have to be found where
+    they physically are before they can be moved. The coordinates are that
+    table's and do not move; only the contig names are the input's.
+
+    Alt contigs are included when present and dropped when not. CHM13 has none
+    and needs none, so the flag is inert there.
     """
-    has_alts = any(c in contigs for c in loci.ALT_CONTIGS)
-    intervals = loci.slice_intervals(include_alts=include_alts and has_alts)
+    alt_contigs = getattr(loci_mod, "ALT_CONTIGS", [])
+    has_alts = any(c in contigs for c in alt_contigs)
+    intervals = loci_mod.slice_intervals(include_alts=include_alts and has_alts)
 
     regions: list[str] = []
     for chrom, start, end in intervals:
-        name = chr19 if chrom == loci.CHROM else chrom
+        name = chr19 if chrom == loci_mod.CHROM else chrom
         if name in contigs:
             # Clip to the contig: a flanked interval can run past the end, and
             # samtools takes that as an error rather than as a truncation.
-            regions.append(loci.as_region(name, start, min(end, contigs[name])))
+            regions.append(loci_mod.as_region(name, start,
+                                              min(end, contigs[name])))
     return regions, has_alts
+
+
+def assembly_of_reference(reference: str | os.PathLike) -> tuple[str, object]:
+    """``(assembly, loci module)`` for a reference FASTA, from its ``.fai``.
+
+    The target of a realignment is a FASTA, not a BAM header, so it cannot be
+    identified the way :func:`source_assembly` identifies an input. The `.fai`
+    carries the same fact — chromosome 19's length — and reading it costs
+    nothing next to guessing from the filename, which is what a user renaming
+    `chm13v2.0.fa` would break.
+    """
+    fai = Path(f"{reference}.fai")
+    if not fai.exists():
+        raise ToolError(
+            f"{fai} not found; index the reference with `samtools faidx` so the "
+            "assembly can be identified from it rather than from its name")
+    lengths = {}
+    for line in fai.read_text().splitlines():
+        f = line.split("\t")
+        if len(f) >= 2:
+            lengths[f[0]] = int(f[1])
+    assembly, _ = source_assembly(lengths)
+    return assembly, LOCI_BY_ASSEMBLY[assembly]
 
 
 def index_is_alt_aware(bwa_index: str | os.PathLike) -> bool:
@@ -406,7 +446,9 @@ def realign_sample(
         env = cram_env(reference)
         contigs = read_contigs(source, reference, samtools=samtools, env=env)
         stats.source_assembly, stats.chr19_name = source_assembly(contigs)
-        regions, has_alts = resolve_regions(contigs, stats.chr19_name)
+        regions, has_alts = resolve_regions(
+            contigs, stats.chr19_name,
+            loci_mod=LOCI_BY_ASSEMBLY[stats.source_assembly])
         stats.had_alt_contigs = has_alts
 
         started = time.time()

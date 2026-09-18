@@ -274,7 +274,7 @@ def call_sample(sample: str, bam: str, model: CoverageModel, *,
 
 def call_lilra6(sample: str, bam: str, model: CoverageModel, *,
                 reference: str | None = None, samtools: str = "samtools",
-                ) -> CNCall:
+                loci_mod=loci) -> CNCall:
     """LILRA6 alone, with its cross-check and nothing else.
 
     LILRB3 is measured and then discarded, which is not waste: LILRA6's only
@@ -291,15 +291,19 @@ def call_lilra6(sample: str, bam: str, model: CoverageModel, *,
     none, so :func:`call_sample` remains where LILRA3 is called.
     """
     a6 = _call_unique_window(sample, "LILRA6", bam, model,
-                             reference=reference, samtools=samtools)
+                             reference=reference, samtools=samtools,
+                             loci_mod=loci_mod)
     b3 = _call_unique_window(sample, "LILRB3", bam, model,
-                             reference=reference, samtools=samtools)
-    _pair_check([a6, b3], bam, model, reference=reference, samtools=samtools)
+                             reference=reference, samtools=samtools,
+                             loci_mod=loci_mod)
+    _pair_check([a6, b3], bam, model, reference=reference, samtools=samtools,
+                loci_mod=loci_mod)
     return a6
 
 
 def _call_unique_window(sample: str, gene: str, bam: str, model: CoverageModel,
-                        *, reference: str | None, samtools: str) -> CNCall:
+                        *, reference: str | None, samtools: str,
+                        loci_mod=loci) -> CNCall:
     call = CNCall(sample=sample, gene=gene, method="unique_window_q20")
 
     if model.lambda1 <= 0:
@@ -318,7 +322,8 @@ def _call_unique_window(sample: str, gene: str, bam: str, model: CoverageModel,
         )
         return call
 
-    measured = _mean_depth(bam, loci.UNIQUE_WINDOWS[gene], loci.MAPQ_STRICT,
+    measured = _mean_depth(bam, loci_mod.UNIQUE_WINDOWS[gene],
+                           loci_mod.MAPQ_STRICT,
                            reference=reference, samtools=samtools)
     if measured is None:
         call.status = "failed"
@@ -448,7 +453,7 @@ def _call_lilra3(sample: str, bam: str, model: CoverageModel, *,
 
 
 def _pair_check(calls: list[CNCall], bam: str, model: CoverageModel, *,
-                reference: str | None, samtools: str) -> None:
+                reference: str | None, samtools: str, loci_mod=loci) -> None:
     """Cross-check LILRA6 against the pooled LILRA6+LILRB3 depth.
 
     Coarse by construction: inverting the pooled ratio divides by the span weight
@@ -466,11 +471,11 @@ def _pair_check(calls: list[CNCall], bam: str, model: CoverageModel, *,
     gene_bodies = []
     spans = []
     for gene in ("LILRA6", "LILRB3"):
-        chrom, start, end = loci.gene_span(gene)
+        chrom, start, end = loci_mod.gene_span(gene)
         gene_bodies.append((chrom, start, end))
         spans.append(end - start)
 
-    measured = _mean_depth(bam, gene_bodies, loci.MAPQ_ANY,
+    measured = _mean_depth(bam, gene_bodies, loci_mod.MAPQ_ANY,
                            reference=reference, samtools=samtools)
     if measured is None:
         return
