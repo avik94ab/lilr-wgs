@@ -7,16 +7,15 @@
 Writes `cn_by_superpopulation.png` and a `-dark.png` twin, because a README is
 read on both surfaces and an inverted light figure is not a dark-mode figure.
 
-Two decisions worth stating, since neither is free:
-
-* **Copy number is an ordered scale, so the fill is a one-hue ramp** — light for
-  fewer copies, dark for more — not a categorical palette. Categorical hues would
-  imply LILRA6 CN 1 and CN 4 are different *kinds* of thing rather than two points
-  on one scale.
-* **LILRA6 CN >= 4 is one class.** The ramp's steps have to stay visibly apart
-  (>= 0.06 OKLCH L between neighbours, the check in the data-viz skill's
-  validator), and this ramp fits five such steps between its light and dark ends,
-  not seven. Five classes it is; 175 of 2,504 samples sit in the folded tail.
+One decision worth stating, since it costs something. Copy number is an *ordered*
+scale, and the textbook fill for it is a one-hue ramp — light for fewer copies,
+dark for more — which makes the ordering legible from the colour alone. These
+panels use **categorical hues** instead, which trades that cue away and buys two
+things back: every copy number gets its own class rather than being folded into a
+">= 4" tail (a one-hue ramp fits five steps between its ends at the >= 0.06 OKLCH L
+separation the validator wants, not seven), and adjacent slices stay far apart for
+a colourblind reader — worst adjacent pair dE 9.1 light / 8.4 dark, against a
+target of 8. The legend is ordered, and the panels are read left to right.
 
 LILRB3 is not plotted. 2,500 of 2,504 samples are CN 2, so its panel would be one
 flat colour and would say only that the gene is stable — which the caption can say
@@ -36,13 +35,17 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.patches import Patch  # noqa: E402
 
-# Steps from the data-viz skill's blue ramp, chosen by its ordinal rule: monotone
-# lightness, >= 0.06 OKLCH L between neighbours, the surface-facing end still
-# clearing 2:1. The dark column is re-stepped for the dark surface and validated
-# there — 450/500 were adjacent in the first draft and failed at dL 0.048.
-RAMP = {
-    "light": ["#86b6ef", "#5598e7", "#2a78d6", "#1c5cab", "#0d366b"],
-    "dark": ["#b7d3f6", "#86b6ef", "#3987e5", "#256abf", "#184f95"],
+# The data-viz skill's categorical slots, in its fixed order — never re-ordered and
+# never cycled, so copy number N is the same hue in both panels and in any later
+# figure. Validated on the adjacent pairlist (the one stacked bars use) in both
+# modes: lightness band, chroma floor, CVD and normal-vision separation all pass.
+# Light mode warns on contrast for aqua/yellow/magenta, whose documented relief is
+# visible direct labels — which is why every segment wide enough carries its value.
+PALETTE = {
+    "light": ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300",
+              "#4a3aa7"],
+    "dark": ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300",
+             "#9085e9"],
 }
 INK = {
     "light": dict(surface="#fcfcfb", primary="#0b0b0b", secondary="#52514e",
@@ -51,16 +54,18 @@ INK = {
                  muted="#898781"),
 }
 SUPERPOPS = ["AFR", "AMR", "EAS", "EUR", "SAS"]
-GENES = [("lilra6_cn", "LILRA6", [0, 1, 2, 3, 4], ["0", "1", "2", "3", "≥ 4"]),
+GENES = [("lilra6_cn", "LILRA6", [0, 1, 2, 3, 4, 5, 6],
+          ["0", "1", "2", "3", "4", "5", "6"]),
          ("lilra3_cn", "LILRA3", [0, 1, 2], ["0", "1", "2"])]
 
 
 def _text_on(fill: str) -> str:
-    """Ink that survives on this fill — the ramp crosses the readable boundary."""
-    r, g, b = (int(fill[i:i + 2], 16) / 255 for i in (1, 3, 5))
-    lum = sum(c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
-              for c in (0.2126 * r, 0.7152 * g, 0.0722 * b))
-    return "#0b0b0b" if lum > 0.16 else "#ffffff"
+    """Ink that survives on this fill — these hues straddle the readable boundary."""
+    channels = [int(fill[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+    linear = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+              for c in channels]
+    lum = 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+    return "#0b0b0b" if lum > 0.2 else "#ffffff"
 
 
 def load(path: Path) -> dict:
@@ -76,13 +81,15 @@ def load(path: Path) -> dict:
         for gene, _, classes, _ in GENES:
             if not row[gene]:
                 continue
-            cn = min(int(row[gene]), classes[-1])   # fold the tail
+            cn = int(row[gene])
+            if cn not in classes:
+                continue
             counts[gene][sup][cn] += 1
     return counts, n
 
 
 def draw(counts, n, mode: str, out: Path) -> None:
-    ink, ramp = INK[mode], RAMP[mode]
+    ink, ramp = INK[mode], PALETTE[mode]
     fig, axes = plt.subplots(1, 2, figsize=(9.6, 4.3), dpi=160,
                              facecolor=ink["surface"])
     fig.subplots_adjust(left=0.07, right=0.985, top=0.78, bottom=0.17, wspace=0.28)

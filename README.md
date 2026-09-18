@@ -64,9 +64,9 @@ superpopulation runs 30–45%, and 31% carry no LILRA3 at all where the others r
 1–6%. At CHB and JPT the LILRA3 deletion is the *major* allele, at ~75% — the
 "~24% deletion frequency" usually quoted is a European-weighted figure.
 
-The rarest classes are real but too thin to see at this scale: 11 samples carry
-no LILRA6 at all — 10 of them African-ancestry — and 36 carry 5 or 6 copies.
-Regenerate the figure with `scripts/plot_cn_by_superpop.py`.
+Every copy number has its own colour, but the rarest are still only slivers: 11
+samples carry no LILRA6 at all — 10 of them African-ancestry — and 36 carry 5 or
+6 copies. Regenerate the figure with `scripts/plot_cn_by_superpop.py`.
 
 ## Just the copy number, on any cluster
 
