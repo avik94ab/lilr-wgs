@@ -96,6 +96,12 @@ donors, which the truth set confirms rather than assumes.
 
 ## 4. Callability
 
+> **This section describes verified arithmetic applied by unverified code.**
+> `depth_model.py` has 38 tests; `callability.py`, which feeds it per-position
+> evidence from a BAM, has none. The thresholds below are sound. Whether they are
+> being applied to correct depth counts has not been checked —
+> [`variant_calling.md`](variant_calling.md) §1.1.
+
 A position at copy number *k* is modelled as NB(k·λ₁, k·r), and is callable when
 its depth falls inside a central interval of that distribution.
 
@@ -301,7 +307,9 @@ control loci in the CRAM slice and copy number is called on that slice, both
 before recruitment happens, so no panel sequence is upstream of a copy number.
 The same property that removes the cohort barrier removes this circularity. It
 remains live for allele sequence, which runs through recruitment and is not yet
-scored.
+scored — and which, more fundamentally, is produced by three modules that have no
+tests at all. [`variant_calling.md`](variant_calling.md) sets out the boundary and
+what would have to happen to move it.
 
 ## 9. Pilot result
 

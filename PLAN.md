@@ -135,6 +135,13 @@ scripts were positional-argument CLIs with no tests; this is the main structural
 
 Each phase ends with something that runs and something that is checked.
 
+**Read `[x]` as "written," not "validated."** The line falls after Phase 5: every
+module up to and including assignment has tests behind it, and the three that
+carry the callable track, variant calling and allele naming — `callability.py`,
+`genotype.py`, `sequences.py`, 1,023 lines — have none. The 101-donor scores in
+Phase 8 are **copy-number** scores. `docs/variant_calling.md` §1 has the module
+table and §2 the order in which that should be repaid.
+
 - [x] **Phase 0 — skeleton.** Repo, plan, env spec, GitHub remote. Toolchain probed: the
       Wynton module samtools is built **without libcurl** and cannot read remote CRAM, so the
       conda environment is mandatory rather than convenient. GATK 4.2.6.0 pinned as before.
@@ -151,8 +158,12 @@ Each phase ends with something that runs and something that is checked.
       gives LILRA3 a second, independent route, so it was not needed.
 - [x] **Phase 5 — per-gene assignment.** Ported arbitration plus the shared-pair table that
       carries the shared-block verdict across the FASTQ hop.
-- [x] **Phase 6 — genotyping.** HaplotypeCaller at ploidy = CN restricted to the callable
-      track, phasing, consensus masked by the same track, CDS/cDNA/protein.
+- [x] **Phase 6 — genotyping (written, not validated).** HaplotypeCaller at ploidy = CN
+      restricted to the callable track, phasing, consensus masked by the same track,
+      CDS/cDNA/protein. The code is real rather than stubbed, but `callability.py`,
+      `genotype.py` and `sequences.py` have no tests and no output of theirs has been
+      scored against truth. No claim about variant calls or allele assignments is
+      currently supported. `docs/variant_calling.md`.
 - [x] **Phase 7 — orchestration.** Snakemake DAG with no cohort barrier, SGE and local
       profiles, the fused per-sample rule.
 - [x] **Phase 8 — validation.** Truth set built (232 donors, 101 in 1KGP). The full
@@ -162,7 +173,9 @@ Each phase ends with something that runs and something that is checked.
       Two bugs found by running it: the LILRA3 junction assay had been measuring
       nothing, and the cohort-scale diagnostic was crying wolf on the one gene that
       scored perfectly. Allele *sequence* is not yet scored (§10).
-- [x] **Phase 9 — documentation.** README, `CLAUDE.md`, `docs/method.md`.
+- [x] **Phase 9 — documentation.** README, `CLAUDE.md`, `docs/method.md`,
+      `docs/variant_calling.md` — the last of which exists to mark where the
+      documentation stops being backed by tests.
 
 ---
 

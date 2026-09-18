@@ -106,6 +106,24 @@ protecting: the predecessor's `cn_cohort` rule sits mid-DAG and forces a cohort 
 run as one batch. If you find yourself adding a cohort-wide fit that something
 downstream consumes, you have reintroduced it.
 
+## Where the tests stop
+
+Everything up to and including assignment is covered — `loci`, `loci_chm13`,
+`coverage`, `depth_model`, `cn`, `realign`, `assign` and the portable duplicate,
+250 tests. **`callability.py`, `genotype.py` and `sequences.py` have none**, which
+is 1,023 lines carrying the callable track, variant calling and allele naming.
+
+The 101-donor validation scored **copy number**. There is no evidence yet for any
+claim about variant calls or allele assignments, and `PLAN.md`'s Phase 6 `[x]`
+means the code was written, not that it was checked. Do not cite a sequence result
+until `docs/variant_calling.md` §2 has been worked through; do not add a fixed
+depth constant downstream of `depth_model` (§3 explains why `DP >= 6` is looser
+than what is already enforced, not stricter).
+
+The sharpest untested edge is `callability.gather_evidence()`: it is the junction
+between arithmetic that is verified and I/O that is not, and its failure modes all
+produce plausible depth with a wrong callable track.
+
 ## The depth model is the point
 
 `src/lilrwgs/depth_model.py` is the reason this project exists. Three properties,

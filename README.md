@@ -23,7 +23,7 @@ See [`PLAN.md`](PLAN.md) for the design and the phase-by-phase build, and
 
 ## Status
 
-All nine phases are built and the pipeline has been scored against assembly
+All nine phases are built, and **copy number** has been scored against assembly
 truth. On the 101 donors who have both an HPRC assembly and a 1000 Genomes CRAM,
 copy number is **100% correct at LILRB3, 99% at LILRA6 and 95% at LILRA3**
 — and five of the six disagreements are the truth set's rather than the
@@ -50,6 +50,14 @@ seven disagreements and the one claim the exercise does *not* support.
 The same run reproduces Hardy-Weinberg for the LILRA3 deletion independently in
 all 26 populations, at frequencies from 0.08 to 0.76 — a check that needs no
 truth set. `PLAN.md` §11.
+
+**Allele sequence is a different matter, and is not yet supported.** Every figure
+above is a copy number. The three modules that produce the callable track, the
+variant calls and the allele names — `callability.py`, `genotype.py`,
+`sequences.py`, 1,023 lines — have no tests, and no output of theirs has been
+scored against anything. The code runs and is not stubbed; nothing has checked
+whether it is right. [`docs/variant_calling.md`](docs/variant_calling.md) marks
+the boundary precisely and sets out what would have to happen to move it.
 
 ## What the cohort looks like
 
