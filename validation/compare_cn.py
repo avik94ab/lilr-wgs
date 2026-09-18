@@ -12,8 +12,11 @@ Two caveats are printed rather than buried, because forgetting either would
 overstate the result:
 
 * **Circularity.** A donor in the overlap is aligned against a panel containing
-  its own haplotypes. Pass `--leave-one-donor-out` results for the number that
-  generalises.
+  its own haplotypes. For copy number this turns out not to matter — the
+  leave-one-donor-out rerun reproduced `cn_calls.tsv` byte for byte, because the
+  measurement happens on the CRAM slice before a panel is opened (`PLAN.md` §10).
+  The flag still labels the report, because the invariance is worth restating
+  only where it has been checked.
 * **Inferred absences.** LILRA3 CN 0 in the truth set comes from a donor being
   absent from that panel while present in the others, not from counting. Use
   `--counted-only` to score without them.
@@ -83,7 +86,7 @@ def main() -> int:
     p.add_argument("--counted-only", action="store_true",
                    help="exclude truth entries inferred from panel absence")
     p.add_argument("--leave-one-donor-out", action="store_true",
-                   help="label the report as the generalising run")
+                   help="label the report as a donor-excluded-panel run")
     p.add_argument("-o", "--output", type=Path)
     args = p.parse_args()
 
@@ -119,9 +122,10 @@ def main() -> int:
         confusion[gene][(expected, called)] += 1
 
     lines = []
-    mode = ("leave-one-donor-out" if args.leave_one_donor_out
-            else "AS-IS (donor's own haplotypes are in the panel; "
-                 "this overstates accuracy)")
+    mode = ("leave-one-donor-out (donor-excluded recruitment panels)"
+            if args.leave_one_donor_out
+            else "as-is (donor's own haplotypes are in the recruitment panel; "
+                 "copy number does not read it — see PLAN.md §10)")
     lines.append(f"copy-number accuracy vs HPRC truth — {mode}")
     if not args.counted_only:
         lines.append("truth includes CN 0 inferred from panel absence "

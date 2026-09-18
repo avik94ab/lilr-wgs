@@ -288,10 +288,20 @@ The stability of LILRA1, LILRA2, LILRB2 and LILRB5 at 2 copies in 231 of 232
 donors is what justifies using them as the recruitment-efficiency anchors — a
 measurement, not an assumption.
 
-**The circularity.** A donor in the overlap is aligned against a panel containing
-its own haplotypes, which inflates recruitment and accuracy relative to an unseen
-sample. `build_truth.py --leave-one-donor-out` writes donor-excluded panels, and
-that score is the one that generalises. Both are reported, labelled.
+**The circularity, and what it reaches.** A donor in the overlap is aligned
+against a panel containing its own haplotypes, which inflates recruitment
+relative to an unseen sample. `build_truth.py --leave-one-donor-out` writes
+donor-excluded panels; both runs are reported, labelled.
+
+Run over all 101, the inflation turns out not to reach copy number. Recruitment
+changed at 445 of 1,111 sample-gene pairs — 99/101 at LILRB3 and 100/101 at
+LILRA6, by up to 11%, against 12/101 at LILRA1 — and `cn_calls.tsv` came back
+byte-identical. That follows from where the measurement sits: λ₁ comes from
+control loci in the CRAM slice and copy number is called on that slice, both
+before recruitment happens, so no panel sequence is upstream of a copy number.
+The same property that removes the cohort barrier removes this circularity. It
+remains live for allele sequence, which runs through recruitment and is not yet
+scored.
 
 ## 9. Pilot result
 
@@ -322,12 +332,43 @@ homozygote — are separable at 30× at all.
 It is also the step that found the LILRA3 bug. Before the truth set existed, a
 uniform "LILRA3 CN 0" across every sample looked entirely plausible.
 
-## 10. What is not yet established
+## 10. Result on the 101-donor overlap
 
-- Accuracy across the full 101-donor overlap, as-is and leave-one-donor-out.
-- Whether 30× supports LILRA6 CN ≥ 4. Separating CN 4 from CN 5 means separating
-  60× from 75×: feasible per position, marginal per sample. The truth set
-  contains 16 donors at CN 4, 5 at CN 5 and 2 at CN 6.
+Every donor with both an HPRC assembly and a 1000 Genomes CRAM, scored on the
+three variable genes. Confident and flagged calls are counted separately because
+they are different products:
+
+| gene | n | confident | flagged | overall |
+|---|---|---|---|---|
+| LILRA3 | 101 | 96/100 96.0% | 0/1 | 95.0% |
+| LILRA6 | 101 | 87/87 100% | 13/14 92.9% | 99.0% |
+| LILRB3 | 101 | 83/83 100% | 18/18 100% | 100% |
+
+The donor-excluded rerun gives the same table, byte for byte (§8).
+
+Six calls disagree with the truth set, and five of the six are the truth set's
+error rather than the pipeline's — each contradicted by the junction assay, which
+shares no failure mode with the depth route that made the call. Three LILRA3
+calls of 1 against a truth of 0 are `inferred_absent` rows where the junction
+reads plainly heterozygous (21–22 clipped against 9–17 spanning). Two LILRA3
+calls of 2 against a counted truth of 1 have **zero** spanning reads out of 44
+and 57 clipped: a deleted chromosome matches the primary assembly and its reads
+cross that base cleanly, and none do, so there is no deleted chromosome in either
+donor and the panel is a haplotype short.
+
+The sixth is a genuine miss — NA20827, LILRA6 truth 5, called 6, at an estimate
+of 5.54 and a confidence of 0.079. It is flagged, and about as flagged as the
+scale allows. That is the answer to whether 30× supports LILRA6 CN ≥ 4: clean
+through CN 4, marginal between 5 and 6, which is where λ₁ ≈ 15 predicts it. The
+pipeline's disagreement rate against a *correct* truth set is one call in 303.
+
+## 11. What is not yet established
+
+- Allele **sequence** accuracy, at any copy number. The truth set carries the
+  assembly contigs and nothing yet compares against them; `compare_cn.py` scores
+  copy number only. This is also the one place the leave-one-donor-out panels
+  will move the answer, since sequence runs through recruitment and copy number
+  does not.
 - Whether the shared-block machinery yields usable *haplotype sequence* at
   LILRA6/LILRB3, as opposed to usable depth. 78.5% and 75.6% callable on one
   sample is encouraging and is not the same claim.

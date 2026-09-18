@@ -1,4 +1,4 @@
-copy-number accuracy vs HPRC truth — as-is (donor's own haplotypes are in the recruitment panel; copy number does not read it — see PLAN.md §10)
+copy-number accuracy vs HPRC truth — leave-one-donor-out (donor-excluded recruitment panels)
 
 gene         n    confident      flagged   overall
 LILRA3      85  83/84 98.8%     0/1 0.0%     97.6%

@@ -17,11 +17,16 @@ pipeline can be scored on:
 panel, which is the validation set.
 
 **The circularity, stated plainly.** A donor in that overlap is being aligned
-against a panel containing its own haplotypes, which inflates recruitment and
-copy-number accuracy relative to an unseen sample. `--leave-one-donor-out` writes
-panels with a donor's own entries removed, and the score from those is the one
-that generalises. Reporting only the as-is number would be reporting the easy
-case.
+against a panel containing its own haplotypes, which inflates recruitment
+relative to an unseen sample. `--leave-one-donor-out` writes panels with a
+donor's own entries removed, so the two can be compared.
+
+Run on all 101 donors, that comparison came out one-sided: recruitment moved at
+445 of 1,111 sample-gene pairs, concentrated at LILRB3 and LILRA6, and copy
+number did not move at all — `cn_calls.tsv` was byte-identical. Copy number is
+measured on the CRAM slice against external control loci before any panel is
+opened, so the panel cannot reach it. The inflation is real for allele sequence,
+which runs through recruitment. See `PLAN.md` §10.
 """
 
 from __future__ import annotations

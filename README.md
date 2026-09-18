@@ -26,14 +26,25 @@ See [`PLAN.md`](PLAN.md) for the design and the phase-by-phase build, and
 All nine phases are built and the pipeline has been scored against assembly
 truth. On the 101 donors who have both an HPRC assembly and a 1000 Genomes CRAM,
 copy number is **100% correct at LILRB3, 99% at LILRA6 and 95% at LILRA3**
-as-is — and five of the six disagreements are the truth set's rather than the
+— and five of the six disagreements are the truth set's rather than the
 pipeline's, each contradicted by an assay that shares no failure mode with the
 one that made the call. `PLAN.md` §9 names every one of them.
 
-Read those numbers with the caveat attached: a donor in that overlap is aligned
-against a panel that contains its own haplotypes, so as-is accuracy is
-optimistic. `validation/README.md` describes the leave-one-donor-out rerun that
-removes the circularity, and reports both.
+The obvious objection is that a donor in that overlap is aligned against a panel
+containing its own haplotypes. Rerunning all 101 against donor-excluded panels
+reproduced `cn_calls.tsv` byte for byte: recruitment changed, by up to 11% at
+LILRB3, but copy number is measured on the CRAM slice against external control
+loci before a panel is ever opened, so it cannot be inflated that way. `PLAN.md`
+§10 has the numbers. The circularity is real for allele *sequence*, which does
+run through recruitment, and that is not yet scored.
+
+Copy number has also been checked against a second, unrelated method:
+[JoGo-LILR](https://doi.org/10.1016/j.humimm.2025.111272) (Nagasaki et al. 2025),
+which is cohort-relative and reads the LILRB3+LILRA6 pair total rather than the
+paralogue-unique window, agrees on LILRA6 for **200/200** 1000 Genomes samples
+across two disjoint cohorts that share no donor with the HPRC overlap.
+[`validation/jogo_crosscheck.md`](validation/jogo_crosscheck.md) has the numbers
+and the one claim that exercise does *not* support.
 
 ## Why srWGS changes the problem
 

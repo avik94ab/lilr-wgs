@@ -1,4 +1,4 @@
-copy-number accuracy vs HPRC truth — as-is (donor's own haplotypes are in the recruitment panel; copy number does not read it — see PLAN.md §10)
+copy-number accuracy vs HPRC truth — leave-one-donor-out (donor-excluded recruitment panels)
 truth includes CN 0 inferred from panel absence (--counted-only to exclude)
 
 gene         n    confident      flagged   overall

@@ -24,7 +24,7 @@ python3 scripts/make_manifest.py --collection 2504 -o config/manifest.tsv
 snakemake -s workflow/Snakefile --cores 32
 snakemake -s workflow/Snakefile --profile profiles/sge     # Wynton
 
-python -m pytest tests/ -q                   # 112 tests, no cluster needed
+python -m pytest tests/ -q                   # 134 tests, no cluster needed
 ```
 
 Every stage is also a standalone CLI, so a failing sample can be debugged without
@@ -159,9 +159,13 @@ same HPRC panels the pipeline aligns against; **101 donors also have a 1000
 Genomes CRAM**. Score with `validation/compare_cn.py`.
 
 A donor in that overlap is aligned against a panel containing its own
-haplotypes, so the as-is number overstates accuracy. `--leave-one-donor-out`
-writes donor-excluded panels, and that is the number that generalises. Report
-both, and say which is which.
+haplotypes. `--leave-one-donor-out` writes donor-excluded panels; the rerun on
+all 101 (`PLAN.md` §10) reproduced `cn_calls.tsv` byte for byte, because copy
+number is measured on the CRAM slice at step 3 of `process_sample` and panels are
+not opened until step 4. **Copy number cannot be inflated by panel circularity —
+do not add a path that would make it so.** Recruitment is inflated, by up to 11%
+at LILRB3, so the caveat is live for allele *sequence*, which has not been scored
+yet. Report both runs, and say which claim each one supports.
 
 ## Conventions
 

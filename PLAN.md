@@ -156,11 +156,12 @@ Each phase ends with something that runs and something that is checked.
 - [x] **Phase 7 — orchestration.** Snakemake DAG with no cohort barrier, SGE and local
       profiles, the fused per-sample rule.
 - [x] **Phase 8 — validation.** Truth set built (232 donors, 101 in 1KGP). The full
-      101-donor run scores **LILRB3 100%, LILRA6 99%, LILRA3 95%** as-is; see §9 for
-      what the disagreements turned out to be and §10 for the number that generalises.
+      101-donor run scores **LILRB3 100%, LILRA6 99%, LILRA3 95%**; see §9 for what the
+      disagreements turned out to be, and §10 for the leave-one-donor-out rerun, which
+      reproduces those scores to the byte because copy number never reads the panel.
       Two bugs found by running it: the LILRA3 junction assay had been measuring
       nothing, and the cohort-scale diagnostic was crying wolf on the one gene that
-      scored perfectly.
+      scored perfectly. Allele *sequence* is not yet scored (§10).
 - [x] **Phase 9 — documentation.** README, `CLAUDE.md`, `docs/method.md`.
 
 ---
@@ -195,9 +196,14 @@ must be recorded as such in the method notes.
 
 Care is needed in one place: the panels were built from those same assemblies, so a sample
 in the overlap is aligning against a panel that contains its own haplotypes. That inflates
-alignment rate and CN accuracy relative to an unseen sample. Phase 8 therefore scores twice —
-once as-is, and once with the sample's own entries removed from the panel (leave-one-donor-out),
-which is the number that generalises.
+alignment rate relative to an unseen sample. Phase 8 therefore scores twice — once as-is,
+and once with the sample's own entries removed from the panel (leave-one-donor-out).
+
+The rerun (§10) settled which numbers the inflation actually reaches. Recruitment moves, by
+up to 11% at LILRB3; copy number does not move at all, because it is measured on the CRAM
+slice against external control loci before a panel is ever opened. So the caveat binds
+allele sequence, which runs through recruitment, and not copy number. Report both runs
+anyway, labelled — an invariance is only worth citing if it was checked.
 
 ---
 
@@ -318,3 +324,64 @@ only slow one: 101 slices in 20 minutes at 8 concurrent, then ~6 minutes of pure
 compute per sample, embarrassingly parallel. Wynton's compute nodes have no outbound
 route at all, so `scripts/stage_slices.py` exists to put the one remote pass somewhere
 that does — which is also the right shape for 2,504 samples.
+
+---
+
+## 10. What the leave-one-donor-out run established
+
+Same 101 staged slices, panels with the donor's own entries removed
+(`build_truth.py --leave-one-donor-out`), per-donor recruitment indices: 146 jobs, 22
+minutes. Scored into `validation/reports/overlap101_lodo.txt`.
+
+**The scores are the as-is scores, to the byte.** `cn_calls.tsv` from the two runs has the
+same md5. Not one of the 303 calls moved, so the §9 table is also the leave-one-donor-out
+table — LILRB3 100%, LILRA6 99%, LILRA3 95%, the same six disagreements with the same
+estimates.
+
+**That is structural, not luck, and the run is what tells the two apart.** Recruitment
+really did change: 445 of 1,111 sample-gene recruitments differ between the runs, and they
+are concentrated exactly where the circularity was worth worrying about —
+
+| gene | recruitments changed | median \|Δ\| | max \|Δ\| |
+|---|---|---|---|
+| LILRB3 | 99/101 | 0.20% | 11.3% |
+| LILRA6 | 100/101 | 0.15% | 4.4% |
+| LILRA1 | 12/101 | 0 | 0.24% |
+| LILRB1 | 17/101 | 0 | 0.47% |
+
+— at the two paralogues, whose recruitment depends most on the panel holding a haplotype
+close to the donor's, and barely at the separable genes. Removing a donor's own haplotypes
+perturbed the thing it should perturb, with maximum leverage on the genes the whole
+shared-block apparatus exists for, and copy number still did not move by one call.
+
+It did not move because copy number is not downstream of the panel. `process_sample` slices
+the CRAM, fits the coverage model, and calls copy number at step 3 against λ₁ from control
+loci in that same slice; panels are not opened until step 4. `cn.call_sample()` takes the
+slice BAM and the model and nothing else. There is no path from a panel sequence to a copy
+number.
+
+So the caveat this project has been attaching to its copy-number accuracy — *as-is is
+optimistic, wait for the honest number* — was misplaced. **For copy number the as-is number
+was always the honest one.** Measuring the external baseline is what bought that, and it is
+the same property that removed the cohort barrier: a number that does not depend on the
+cohort does not depend on the panel either. The caveat was still worth spending 22 minutes
+on rather than arguing away from the code, because reading the code and concluding an assay
+must work is precisely how the LILRA3 junction measured nothing for three phases.
+
+**One number moved, and it is the one that should.** The recruitment efficiency is measured
+*after* recruitment, on the per-gene FASTQs, so it can see the panel change. Four samples of
+101 shifted a single anchor's median depth by 1× (HG00097 and NA21110 at LILRB2, 28→27 and
+38→36; NA18952 and NA20282 at LILRB5, 30→29 and 26→25). The efficiency factor itself was
+unchanged in 101 of 101, and `cohort_scale.json` is identical. A perturbation of recruitment
+that reaches the efficiency measurement and stops there is the correct behaviour for a
+quantity that describes the pipeline path rather than the sample.
+
+**What is still circular is the sequence, and it is unscored.** Allele sequence runs through
+recruitment, arbitration, realignment and calling — the whole path the panel sits at the
+head of — so there the circularity is real, and the table above says a LODO run would move
+the number at LILRA6 and LILRB3 rather than leave it alone. This run produced no genotypes:
+its targets were `cn/cohort_scale.json` and `qc/coverage_cohort.tsv`, which is all copy
+number needs. Open question 3 — whether the shared-block machinery yields usable haplotype
+*sequence* at those two genes, as opposed to usable depth — is where this exercise has
+teeth, and it is still open. The panels, the per-donor indices and the staged slices are all
+built, so the expensive part of that run is already paid for.

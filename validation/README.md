@@ -44,10 +44,20 @@ written out rather than left to be rediscovered:
 ## Read the caveats, they are not decoration
 
 **Circularity.** A donor in the overlap is aligned against a panel containing its
-own haplotypes, which inflates recruitment and accuracy relative to an unseen
-sample. `build_truth.py --leave-one-donor-out <dir>` writes donor-excluded
-panels; rerunning against those and scoring with `--leave-one-donor-out` gives
-the number that generalises. Report both, labelled.
+own haplotypes, which inflates recruitment relative to an unseen sample.
+`build_truth.py --leave-one-donor-out <dir>` writes donor-excluded panels;
+rerunning against those is how you find out what that inflation actually reaches.
+
+It has been run, on all 101 (`PLAN.md` §10). **Copy number is unaffected — the two
+`cn_calls.tsv` files have the same md5** — and that is structural rather than
+lucky: copy number is measured on the CRAM slice against control loci outside the
+cluster, at step 3 of `process_sample`, and panels are not opened until step 4.
+Recruitment is affected, at 445 of 1,111 sample-gene pairs, concentrated at
+LILRB3 (99/101 changed, up to 11%) and LILRA6 (100/101, up to 4%) and barely
+present at the separable genes. So the caveat binds allele *sequence*, which runs
+through recruitment, and not copy number. Rerun it anyway when the recruitment
+path changes — the claim is an invariance, and an unchecked invariance is a
+hope.
 
 ```bash
 python validation/build_truth.py --panels resources/gdna \
@@ -89,3 +99,25 @@ compute frequencies on the unfiltered calls.
   CN 1–4 and LILRA3 CN 0/2, 15/15 correct. The run that found the LILRA3
   supplementary-alignment bug: before the truth set existed, a uniform
   "LILRA3 CN 0" across every sample looked entirely plausible.
+- [`reports/overlap101_asis.txt`](reports/overlap101_asis.txt) — all 101, against
+  the shipped panels. LILRB3 100%, LILRA6 99%, LILRA3 95%, with every
+  disagreement named and the junction evidence beside it.
+  [`..._counted.txt`](reports/overlap101_asis_counted.txt) drops the inferred
+  absences and LILRA3 becomes 97.6%.
+- [`reports/overlap101_lodo.txt`](reports/overlap101_lodo.txt) — the same 101
+  against donor-excluded panels. Identical to the as-is report, for the reason
+  above. [`..._counted.txt`](reports/overlap101_lodo_counted.txt) likewise.
+
+Allele *sequence* accuracy is not scored by any of these. `compare_cn.py` is a
+copy-number scorer; the sequence comparison is the outstanding piece of Phase 8,
+and it is the one where the leave-one-donor-out panels will change the answer.
+
+## A second opinion that is not an assembly
+
+Everything above compares this pipeline against HPRC assemblies.
+[`jogo_crosscheck.md`](jogo_crosscheck.md) compares it against **another caller**
+— JoGo-LILR (Nagasaki et al. 2025), which is cohort-relative and reads the
+LILRB3+LILRA6 pair total rather than the paralogue-unique window — on 200 further
+1000 Genomes samples that share no donor with the overlap above. 200/200 on
+LILRA6. It also says why the matching LILRB3 figure is much weaker evidence and
+should not be quoted beside it.

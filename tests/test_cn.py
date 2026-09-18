@@ -10,12 +10,18 @@ detectable downstream. So "not measured" has to survive as a distinct value.
 
 from __future__ import annotations
 
+import ast
+import inspect
+from pathlib import Path
+
+from lilrwgs import cn as cn_module
 from lilrwgs.cn import (
     AMBIGUOUS_BAND,
     CNCall,
     CN_RANGE,
     _fit_unit,
     _call_unique_window,
+    call_sample,
     integerise,
     refine_cohort,
     tally_junction,
@@ -331,3 +337,72 @@ class TestUnitFitDeclinesWhenUnconstrained:
         result = refine_cohort(self._calls("LILRA6", estimates))
         assert result["LILRA6"]["unit"] is not None
         assert "systematically off" in result["LILRA6"]["note"]
+
+
+class TestCopyNumberDoesNotReadTheRecruitmentPanel:
+    """The one structural fact the leave-one-donor-out validation rests on.
+
+    Rerunning all 101 overlap donors against panels with their own haplotypes
+    removed reproduced `cn_calls.tsv` byte for byte, while recruitment itself
+    changed at 445 of 1,111 sample-gene pairs — 99/101 at LILRB3, by up to 11%.
+    That is what licenses reporting the as-is copy-number accuracy as the honest
+    one: the panel is downstream of the measurement, so it cannot inflate it.
+
+    The invariance is cheap to lose. Feeding a recruited read into the
+    copy-number path — a depth taken from a per-gene BAM, an estimate refined
+    against panel alignment rate — would make the published accuracy circular
+    again, and nothing in the output would look any different. PLAN.md §10.
+    """
+
+    def test_call_sample_is_given_the_slice_and_the_model_and_nothing_else(self):
+        params = set(inspect.signature(call_sample).parameters)
+        assert params == {"sample", "bam", "model", "reference", "samtools"}, (
+            f"call_sample's inputs have changed to {sorted(params)}. If one of "
+            "them carries recruited reads, copy number is no longer independent "
+            "of the panel and the leave-one-donor-out score stops meaning what "
+            "PLAN.md §10 says it means."
+        )
+
+    def test_the_module_never_imports_the_recruitment_path(self):
+        """Assert the dependency, not a spelling: walk the imports.
+
+        Both halves of an import matter. `from lilrwgs import assign` puts the
+        name in the aliases and `lilrwgs` in `node.module`, so a scan that reads
+        only the module misses it — this test passed on a copy of `cn.py` with
+        that very line added before the aliases were included.
+        """
+        tree = ast.parse(Path(cn_module.__file__).read_text())
+        imported: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported.update(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                imported.add(node.module or "")
+                imported.update(alias.name for alias in node.names)
+        leaked = {m for m in imported if m.split(".")[-1] in ("assign", "sequences")}
+        assert not leaked, (
+            f"lilrwgs.cn imports {sorted(leaked)}, which is the recruitment and "
+            "assignment side of the pipeline. Copy number is measured on the "
+            "CRAM slice before any panel is opened; keep it that way."
+        )
+
+    def test_process_sample_calls_copy_number_before_it_opens_a_panel(self):
+        """Order in the driver, which is where the two stages actually meet."""
+        driver = Path(__file__).resolve().parent.parent / "scripts" / "process_sample.py"
+        tree = ast.parse(driver.read_text())
+
+        def first_line(name: str) -> int:
+            lines = [
+                node.lineno for node in ast.walk(tree)
+                if isinstance(node, ast.Call)
+                and (getattr(node.func, "attr", None) == name
+                     or getattr(node.func, "id", None) == name)
+            ]
+            assert lines, f"{name} is no longer called in process_sample.py"
+            return min(lines)
+
+        assert first_line("call_sample") < first_line("align_to_panels"), (
+            "process_sample now recruits against the panels before it calls "
+            "copy number. Even if the copy-number call does not use the result, "
+            "this is the edit that precedes making it do so."
+        )
