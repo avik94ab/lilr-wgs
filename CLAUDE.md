@@ -17,6 +17,7 @@ pipeline's depth constants are calibrated to several-hundred-× data. Read
 micromamba create -y -f environment.yml && micromamba activate lilr-wgs
 bash scripts/check_env.sh                    # asserts samtools has libcurl
 bash scripts/fetch_reference.sh              # ~3.2 GB, once
+bash scripts/fetch_bwa_index.sh              # ~5.3 GB, once; includes the .alt
 bash scripts/build_indices.sh resources/gdna resources/gdna_index \
      resources/bundle/references resources/locus_index 8
 
@@ -24,7 +25,14 @@ python3 scripts/make_manifest.py --collection 2504 -o config/manifest.tsv
 snakemake -s workflow/Snakefile --cores 32
 snakemake -s workflow/Snakefile --profile profiles/sge     # Wynton
 
-python -m pytest tests/ -q                   # 169 tests, no cluster needed
+python -m pytest tests/ -q                   # 197 tests, no cluster needed
+
+# The realigning front end: any GRCh38 CRAM, however it was aligned.
+printf '%s\n' /data/*.final.cram > inputs.txt
+python3 scripts/lilra6_cn.py --inputs inputs.txt \
+    --reference resources/reference/GRCh38_full_analysis_set_plus_decoy_hla.fa \
+    --threads 8 --jobs 4 -o lilra6_cn.tsv
+qsub -t 1-25 scripts/lilra6_array.sh inputs.txt results/lilra6
 ```
 
 Every stage is also a standalone CLI, so a failing sample can be debugged without
@@ -45,7 +53,20 @@ python -m lilrwgs.genotype HG00096 LILRB1 results/reads/HG00096 \
 ```
 CRAM ─► [process_sample] ─► coverage model, CN, per-gene reads
               └─► [genotype] ×11 ─► [summary]      [cohort_scale] (a leaf)
+
+CRAM ─► [realign] ─► GRCh38 BAM ─► same coverage model, same CN ─► LILRA6
+        (scripts/lilra6_cn.py — a second front end, not a second pipeline)
 ```
+
+**There are two front ends and one everything-else.** `process_sample` reads
+depth out of the alignment the CRAM arrived in. `scripts/lilra6_cn.py` extracts
+the LRC and the control loci, converts them back to FASTQ, and realigns with
+`bwa mem -Y` against the analysis set and its alt index. They differ only in how
+the BAM is produced: `coverage.measure` and `cn.call_sample` take a BAM in
+GRCh38 coordinates and do not care which aligner made it, which is exactly why
+the two are comparable and why `validation/compare_realign.py` can compare them.
+Do not fork the copy-number logic to serve the second path — if realigned input
+needs different thresholds, the thresholds were wrong.
 
 `src/lilrwgs/` is an importable package; `scripts/` holds drivers; `workflow/`
 holds only the DAG. Pure logic (`depth_model`, the fitting functions in
@@ -106,6 +127,16 @@ recruitment, arbitration and realignment have each dropped reads.
   one. Grep the whole output.
 - **Relative paths break in pipeline stages**, which run in a scratch cwd.
   Resolve to absolute before handing anything to a tool.
+- **`bwa` never says the `.alt` file is missing.** It looks for `{index}.alt`,
+  and without it aligns without ALT-awareness — no warning, no non-zero exit.
+  Every MAPQ-20 window in the LRC then reads near zero for every sample alike,
+  which is a cohort of LILRA6 deletion homozygotes. `realign.index_is_alt_aware`,
+  `scripts/check_env.sh` and `scripts/lilra6_array.sh` each check for the file
+  because nothing downstream can tell that case from real data.
+- **chr19 is called `chr19` in GRCh37 too.** A name check passes and the
+  extraction returns a different half-megabase. `realign.source_assembly` tells
+  the two apart by chromosome 19's length (58,617,616 vs 59,128,983) and refuses
+  rather than lifting over.
 - **The module-provided samtools on Wynton has no libcurl.** Use the conda env.
 - **Wynton compute nodes have no outbound internet.** A remote CRAM in a job dies
   with `Destination address required`; the login node is fine, so this is

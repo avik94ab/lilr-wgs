@@ -7,7 +7,7 @@
 set -uo pipefail
 fail=0
 
-for tool in samtools bcftools bowtie2 bowtie2-build gatk whatshap miniprot python; do
+for tool in samtools bcftools bwa bowtie2 bowtie2-build gatk whatshap miniprot python; do
     if command -v "$tool" > /dev/null; then
         printf "  %-14s %s\n" "$tool" "$(command -v "$tool")"
     else
@@ -27,6 +27,21 @@ if command -v samtools > /dev/null; then
         echo "         module build, or stage CRAMs locally."
         fail=1
     fi
+fi
+
+# The `.alt` file, which bwa finds by name and never mentions. Without it the
+# realignment is not ALT-aware, every MAPQ-20 window in the LRC reads near zero
+# for every sample alike, and a whole cohort comes out as apparent LILRA6
+# deletion homozygotes. There is no error message from bwa for this -- the run
+# simply succeeds and is wrong -- so it is checked here instead.
+REF="${LILRWGS_REFERENCE:-resources/reference/GRCh38_full_analysis_set_plus_decoy_hla.fa}"
+if [ -s "$REF.alt" ]; then
+    echo "  bwa .alt present: realignment will be ALT-aware"
+elif [ -s "$REF" ]; then
+    echo "  WARNING: $REF.alt is missing."
+    echo "           bwa gives no error for this; it just aligns without"
+    echo "           ALT-awareness, and every LILRA6 call becomes not_measured."
+    echo "           Run scripts/fetch_bwa_index.sh"
 fi
 
 if [ "$fail" -ne 0 ]; then

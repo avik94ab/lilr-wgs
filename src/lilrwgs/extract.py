@@ -145,6 +145,43 @@ def check_remote_support(samtools: str = "samtools") -> None:
         )
 
 
+def read_contigs(source: str, reference: str | os.PathLike | None = None, *,
+                 samtools: str = "samtools", env: dict | None = None,
+                 ) -> dict[str, int]:
+    """``{contig: length}`` from a CRAM or BAM header.
+
+    Asking up front separates "this file was aligned to a primary-only
+    reference" — a real, reportable fact about the data — from "samtools
+    failed", which a bare error on an unknown region would conflate. Both
+    produce no LILRA3; only one is a bug.
+
+    The lengths are returned and not only the names because they are what
+    identifies the assembly: :func:`lilrwgs.realign.source_assembly` tells
+    GRCh38 from GRCh37 by chr19's length, since the two share every contig name
+    and differ by half a megabase at exactly the locus this pipeline reads.
+    """
+    cmd = [samtools, "view", "-H"]
+    if reference:
+        cmd += ["-T", str(Path(reference).resolve())]
+    header = run(cmd + [source], env=env if env is not None else cram_env(reference)).stdout
+
+    contigs: dict[str, int] = {}
+    for line in header.splitlines():
+        if not line.startswith("@SQ"):
+            continue
+        name = length = None
+        # An @SQ line's fields are unordered, and the analysis set's HLA contigs
+        # have colons in their names, so neither field can be found positionally.
+        for part in line.split("\t"):
+            if part.startswith("SN:"):
+                name = part[3:]
+            elif part.startswith("LN:"):
+                length = int(part[3:])
+        if name is not None:
+            contigs[name] = length or 0
+    return contigs
+
+
 def slice_cram(
     sample: str,
     cram: str,
@@ -154,6 +191,8 @@ def slice_cram(
     threads: int = 4,
     tmpdir: str | os.PathLike | None = None,
     include_alts: bool = True,
+    regions: list[str] | None = None,
+    index: str | os.PathLike | None = None,
     samtools: str = "samtools",
 ) -> dict:
     """The one remote pass. Fetch every region any stage needs into a local BAM.
@@ -167,6 +206,16 @@ def slice_cram(
         include_alts: include the alt-contig intervals carrying LILRA3. Off only
             makes sense for a CRAM aligned to a primary-only reference, where
             LILRA3 is then not measurable by depth at all.
+        regions: samtools region strings to fetch, overriding the ones derived
+            from :mod:`lilrwgs.loci`. For :mod:`lilrwgs.realign`, which resolves
+            the same intervals against whatever contig names the source header
+            uses — the coordinates are still this module's, but the names are
+            the input's, and hardcoding ``chr19`` here would refuse a CRAM that
+            is merely spelled differently.
+        index: the ``.crai``/``.bai``, when it is not beside the data. htslib
+            finds it by suffix otherwise, which covers both the usual local case
+            and the remote one; this is for a manifest that names an index kept
+            apart from the file it indexes.
 
     Returns:
         A dict of counts and timings, including whether each contig class was
@@ -189,16 +238,15 @@ def slice_cram(
     # was aligned to a primary-only reference" — a real, reportable fact about
     # the data — from "samtools failed", which a bare error on an unknown region
     # would conflate. Both produce no LILRA3; only one is a bug.
-    header = run([samtools, "view", "-H", "-T", str(reference), cram], env=env).stdout
-    contigs = {part[3:] for ln in header.splitlines() if ln.startswith("@SQ")
-               for part in ln.split("\t") if part.startswith("SN:")}
+    contigs = set(read_contigs(cram, reference, samtools=samtools, env=env))
 
     has_alts = any(c in contigs for c in loci.ALT_CONTIGS)
     if include_alts and not has_alts:
         include_alts = False
 
-    regions = loci.slice_regions(include_alts=include_alts)
-    regions = [r for r in regions if r.split(":")[0] in contigs]
+    if regions is None:
+        regions = loci.slice_regions(include_alts=include_alts)
+    regions = [r for r in regions if r.rsplit(":", 1)[0] in contigs]
     if not regions:
         raise ToolError(
             f"{sample}: none of the requested contigs are in the CRAM header.\n"
@@ -215,9 +263,14 @@ def slice_cram(
                 # region it overlaps unless told otherwise. The regions are
                 # merged upstream, but overlap here doubles depth rather than
                 # erroring, so both guards are kept.
+                # -X, when an index is named, puts it immediately after the file
+                # it indexes; samtools pairs the two positionally, so the order
+                # here is not stylistic.
                 [samtools, "view", "-u", "-M", "-T", str(reference),
                  "-F", str(EXCLUDE_FLAGS),
-                 "-@", str(max(1, threads // 2)), cram, *regions],
+                 "-@", str(max(1, threads // 2)),
+                 *(["-X"] if index else []),
+                 cram, *([str(index)] if index else []), *regions],
                 [samtools, "sort", "-@", str(max(1, threads // 2)),
                  "-T", str(tmp / "sort"), "-o", str(out_bam), "-"],
             ],

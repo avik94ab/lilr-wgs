@@ -29,7 +29,10 @@ dependencies:
   - htslib>=1.19
   - bowtie2>=2.5
   - bedtools>=2.31
-  - bwa>=0.7.17          # only for rebuilding reference indices, not per sample
+  # Per sample, not only for building indices: scripts/lilra6_cn.py realigns
+  # each sample's extracted LRC reads so that ALT-awareness is a property of
+  # this pipeline rather than of whatever alignment the input CRAM arrived in.
+  - bwa>=0.7.17
 
   # --- variant calling, phasing, annotation ---
   - gatk4=4.2.6.0

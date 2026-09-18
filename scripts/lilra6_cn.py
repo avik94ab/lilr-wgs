@@ -1,0 +1,328 @@
+#!/usr/bin/env python3
+"""LILRA6 copy number from a list of CRAMs, by extracting and realigning.
+
+    python3 scripts/lilra6_cn.py --inputs crams.tsv \
+        --reference resources/reference/GRCh38_full_analysis_set_plus_decoy_hla.fa \
+        --threads 8 --jobs 4 -o lilra6_cn.tsv
+
+`--inputs` is a list file, one sample per line, whitespace- or tab-separated:
+
+    /data/HG00096.final.cram    /data/HG00096.final.cram.crai
+    https://.../HG00097.final.cram
+    HG00099  /data/odd/name.cram  /indexes/odd.crai
+
+One, two or three columns. With one, the index is wherever htslib finds it by
+suffix and the sample name comes from the filename; with two, the second column
+is the index; with three, the first is an explicit sample name. A `#` line is a
+comment, and a header line naming the columns is tolerated and skipped.
+
+Why this exists rather than `process_sample.py`: that one reads the depth
+straight out of the input alignment, so every copy number it reports is
+conditional on the input having been aligned to GRCh38 *with the `.alt` file*.
+That holds for the 1000 Genomes 30x set and is an assumption everywhere else.
+Here the LRC and the control loci are pulled out of whatever alignment they
+arrived in and realigned against the analysis set with its alt index, so
+ALT-awareness is a property of this pipeline rather than of the input.
+
+What comes out is LILRA6, and `status` is not decoration: a failed measurement
+and a true zero are different values. LILRA6 CN 0 is real and rare, and if the
+realignment is not ALT-aware every MAPQ-20 window in the cluster reads near zero
+for every sample alike — so that case is reported `not_measured` and left empty,
+never filled in as 0. LILRB3 and LILRA3 are measured too, because LILRA6's
+cross-check is the pooled LILRA6+LILRB3 depth, and they are written to a
+companion file rather than thrown away.
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import os
+import shutil
+import sys
+import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
+from lilrwgs import cn, coverage, realign  # noqa: E402
+from lilrwgs.shell import ToolError  # noqa: E402
+
+# Stripped from a filename to get a sample name, longest first so that
+# `.final.cram` wins over `.cram` and does not leave a trailing `.final`.
+SAMPLE_SUFFIXES = (".final.cram", ".slice.bam", ".cram", ".bam", ".sam")
+
+# Column names a header line might use, so one can be recognised and skipped
+# rather than silently processed as a sample called "sample_id".
+HEADER_TOKENS = {"sample", "sample_id", "cram", "crai", "bam", "bai", "index"}
+
+OUTPUT_FIELDS = [
+    "sample", "gene", "copies", "estimate", "confidence", "status",
+    "ambiguous", "method", "lambda1", "mean_depth", "alt_verdict",
+    "n_pairs", "notes",
+    # The raw counts the call was made from. Carried for the same reason
+    # `cn.CNCall.as_row` carries it: a copy number without its evidence cannot be
+    # re-adjudicated later, and in this cluster the calls that need
+    # re-adjudicating are exactly the plausible ones. Dropping this column cost
+    # an afternoon -- a systematic LILRA3 shift showed up in the comparison and
+    # the numbers needed to explain it had been thrown away.
+    "support",
+]
+
+
+def sample_name(path: str) -> str:
+    base = os.path.basename(path.split("?")[0].rstrip("/"))
+    for suffix in SAMPLE_SUFFIXES:
+        if base.endswith(suffix):
+            return base[: -len(suffix)]
+    return os.path.splitext(base)[0]
+
+
+def read_inputs(path: Path) -> list[dict]:
+    """The list file -> ``[{sample, source, index}]``.
+
+    Deliberately forgiving about shape and strict about duplicates: a list
+    assembled by hand or by `ls` is the normal case, but two rows claiming the
+    same sample name means one of them silently overwrites the other's output.
+    """
+    rows: list[dict] = []
+    seen: dict[str, str] = {}
+
+    for lineno, raw in enumerate(path.read_text().splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        fields = line.split("\t") if "\t" in line else line.split()
+        fields = [f for f in (f.strip() for f in fields) if f]
+        if not fields:
+            continue
+        if lineno == 1 and {f.lower() for f in fields} & HEADER_TOKENS:
+            continue
+
+        if len(fields) == 1:
+            sample, source, index = sample_name(fields[0]), fields[0], None
+        elif len(fields) == 2:
+            sample, source, index = sample_name(fields[0]), fields[0], fields[1]
+        else:
+            sample, source, index = fields[0], fields[1], fields[2]
+
+        if sample in seen:
+            raise SystemExit(
+                f"{path}:{lineno}: two rows both name the sample {sample!r}\n"
+                f"  {seen[sample]}\n  {source}\n"
+                "Give the first column an explicit, distinct sample name."
+            )
+        seen[sample] = source
+        rows.append({"sample": sample, "source": source, "index": index})
+
+    if not rows:
+        raise SystemExit(f"{path}: no inputs found")
+    return rows
+
+
+def call_one(row: dict, reference: str, bwa_index: str, outdir: Path,
+             threads: int, keep_bam: bool) -> dict:
+    """One sample, end to end. Returns a status dict; never raises.
+
+    Never raises because a cohort is a list of independent samples and one
+    unreadable CRAM should cost that sample, not the run. The failure is carried
+    in the row rather than in the exit code, and `status` is `failed` — which is
+    a different value from a copy number of 0 everywhere downstream.
+    """
+    sample = row["sample"]
+    work = Path(os.environ.get("TMPDIR", "/tmp")) / f"lilra6_{sample}"
+    work.mkdir(parents=True, exist_ok=True)
+    bam = (outdir / "realigned" / f"{sample}.bam") if keep_bam else \
+        (work / f"{sample}.bam")
+    started = time.time()
+
+    try:
+        stats = realign.realign_sample(
+            sample, row["source"], reference, bwa_index, bam,
+            threads=threads, tmpdir=str(work), index=row["index"])
+
+        # The coverage model reads the realigned BAM, so lambda_1 and the LILRA6
+        # window depth are measured in the same units on the same alignment --
+        # which is what makes the ratio a copy number rather than a comparison
+        # between two pipelines' losses.
+        model = coverage.measure(sample, str(bam), reference=reference)
+        # alt_depth_valid=False: this BAM was built by extracting the LRC and
+        # realigning it, so it cannot hold the genome-wide reads whose
+        # supplementary alignments the LILRA3 alt-depth route counts. LILRA3
+        # comes from the junction assay here. See cn._call_lilra3.
+        calls = cn.call_sample(sample, str(bam), model, reference=reference,
+                               alt_depth_valid=False)
+
+        rows = []
+        for call in calls:
+            r = call.as_row()
+            rows.append({
+                "sample": sample,
+                "gene": r["gene"],
+                "copies": r["copies"],
+                "estimate": r["estimate"],
+                "confidence": r["confidence"],
+                "status": r["status"],
+                "ambiguous": r["ambiguous"],
+                "method": r["method"],
+                "lambda1": round(model.lambda1, 2),
+                "mean_depth": call.support.get("mean_depth", ""),
+                "alt_verdict": model.alt_verdict,
+                "n_pairs": stats.n_pairs,
+                "notes": ";".join(filter(None, [r["notes"]] + stats.warnings)),
+                "support": r["support"],
+            })
+        return {"sample": sample, "ok": True, "rows": rows,
+                "realign": stats.as_row(), "coverage": model.as_row(),
+                "elapsed_s": round(time.time() - started, 1)}
+
+    except (ToolError, OSError, ValueError) as exc:
+        return {
+            "sample": sample, "ok": False, "error": str(exc)[:600],
+            "elapsed_s": round(time.time() - started, 1),
+            "rows": [{"sample": sample, "gene": g, "copies": "", "estimate": "",
+                      "confidence": 0.0, "status": "failed", "ambiguous": False,
+                      "method": "", "lambda1": "", "mean_depth": "",
+                      "alt_verdict": "", "n_pairs": "", "support": "",
+                      "notes": str(exc)[:200].replace("\n", " ")}
+                     for g in ("LILRA6", "LILRB3", "LILRA3")],
+        }
+    finally:
+        # Always: when --keep-realigned is set the BAM is written under outdir,
+        # not here, so there is nothing in the scratch dir worth keeping either
+        # way. Left behind, it is ~200 MB of FASTQ and slice per sample.
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--inputs", type=Path, required=True,
+                   help="list file of CRAM/BAM paths or URLs, optional index "
+                        "and sample-name columns")
+    p.add_argument("--reference", type=Path, required=True,
+                   help="the GRCh38 analysis-set FASTA the CRAMs were "
+                        "compressed against")
+    p.add_argument("--bwa-index", type=Path,
+                   help="bwa index base; defaults to --reference. "
+                        "{base}.alt must exist or LILRA6 is refused")
+    p.add_argument("-o", "--output", type=Path, required=True,
+                   help="LILRA6 copy number, TSV")
+    p.add_argument("--all-genes-output", type=Path,
+                   help="LILRB3 and LILRA3 as well; defaults to "
+                        "<output>.all_genes.tsv")
+    p.add_argument("--threads", type=int, default=8,
+                   help="threads per sample, for bwa and samtools (default 8)")
+    p.add_argument("--jobs", type=int, default=1,
+                   help="samples in parallel (default 1). Total load is "
+                        "--jobs x --threads")
+    p.add_argument("--outdir", type=Path, default=Path("results/lilra6"),
+                   help="where per-sample QC lands")
+    p.add_argument("--keep-realigned", action="store_true",
+                   help="keep the realigned BAMs under <outdir>/realigned")
+    args = p.parse_args()
+
+    reference = args.reference.resolve()
+    bwa_index = (args.bwa_index or args.reference).resolve()
+
+    if not reference.exists():
+        raise SystemExit(f"{reference}: not found; run scripts/fetch_reference.sh")
+    for ext in (".bwt", ".pac", ".sa", ".ann", ".amb"):
+        if not Path(str(bwa_index) + ext).exists():
+            raise SystemExit(
+                f"{bwa_index}{ext}: not found — the bwa index is incomplete.\n"
+                "Run scripts/fetch_bwa_index.sh")
+    if not realign.index_is_alt_aware(bwa_index):
+        # Not fatal, because the run still produces a correct LILRA3 call and an
+        # honest `not_measured` for LILRA6. But it is the single mistake that
+        # turns this cohort into a cohort of apparent deletion homozygotes, so
+        # it is said once, loudly, before any work happens.
+        print(f"WARNING: {bwa_index}.alt is missing. The realignment will not "
+              "be ALT-aware and every LILRA6 call will be `not_measured`.\n"
+              "         Run scripts/fetch_bwa_index.sh.", file=sys.stderr)
+
+    rows = read_inputs(args.inputs)
+    args.outdir.mkdir(parents=True, exist_ok=True)
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    all_out = args.all_genes_output or args.output.with_suffix(
+        args.output.suffix + ".all_genes.tsv")
+
+    print(f"{len(rows)} samples, {args.jobs} x {args.threads} threads, "
+          f"realigning against {bwa_index}", file=sys.stderr)
+
+    results: list[dict] = []
+    started = time.time()
+    if args.jobs > 1:
+        with ProcessPoolExecutor(max_workers=args.jobs) as pool:
+            futures = {
+                pool.submit(call_one, r, str(reference), str(bwa_index),
+                            args.outdir, args.threads, args.keep_realigned): r
+                for r in rows
+            }
+            for i, fut in enumerate(as_completed(futures), 1):
+                res = fut.result()
+                results.append(res)
+                _progress(i, len(rows), res)
+    else:
+        for i, r in enumerate(rows, 1):
+            res = call_one(r, str(reference), str(bwa_index), args.outdir,
+                           args.threads, args.keep_realigned)
+            results.append(res)
+            _progress(i, len(rows), res)
+
+    results.sort(key=lambda r: r["sample"])
+    lilra6 = [row for res in results for row in res["rows"]
+              if row["gene"] == "LILRA6"]
+    others = [row for res in results for row in res["rows"]
+              if row["gene"] != "LILRA6"]
+
+    _write_tsv(args.output, lilra6)
+    _write_tsv(all_out, others)
+    (args.outdir / "qc.json").write_text(json.dumps(
+        [{k: v for k, v in r.items() if k != "rows"} for r in results],
+        indent=2, sort_keys=True))
+
+    n_failed = sum(1 for r in results if not r["ok"])
+    measured = [r for r in lilra6 if r["status"] == "measured"]
+    print(f"\n{len(measured)}/{len(rows)} LILRA6 calls measured, "
+          f"{n_failed} samples failed, {time.time() - started:.0f}s",
+          file=sys.stderr)
+    if measured:
+        dist: dict = {}
+        for r in measured:
+            dist[r["copies"]] = dist.get(r["copies"], 0) + 1
+        print("  LILRA6 CN: " + ", ".join(f"{k}:{dist[k]}" for k in sorted(dist)),
+              file=sys.stderr)
+    print(f"  {args.output}\n  {all_out}\n  {args.outdir / 'qc.json'}",
+          file=sys.stderr)
+    # A failed sample is a row in the output, not an exit code -- but a run where
+    # everything failed is a configuration problem and should not look like a
+    # success to a scheduler.
+    return 1 if n_failed == len(rows) else 0
+
+
+def _progress(i: int, total: int, res: dict) -> None:
+    if res["ok"]:
+        a6 = next((r for r in res["rows"] if r["gene"] == "LILRA6"), {})
+        detail = (f"LILRA6={a6.get('copies')} ({a6.get('status')})"
+                  if a6 else "no call")
+    else:
+        detail = f"FAILED: {res['error'].splitlines()[0][:70]}"
+    print(f"  [{i}/{total}] {res['sample']}: {detail} "
+          f"[{res['elapsed_s']}s]", file=sys.stderr)
+
+
+def _write_tsv(path: Path, rows: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=OUTPUT_FIELDS, delimiter="\t",
+                           extrasaction="ignore")
+        w.writeheader()
+        w.writerows(rows)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

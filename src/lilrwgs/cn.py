@@ -249,14 +249,24 @@ def tally_junction(sam_lines, left: int, right: int) -> tuple[int, int]:
 
 def call_sample(sample: str, bam: str, model: CoverageModel, *,
                 reference: str | None = None, samtools: str = "samtools",
+                alt_depth_valid: bool = True,
                 ) -> list[CNCall]:
-    """Copy number for the three variable genes in one sample."""
+    """Copy number for the three variable genes in one sample.
+
+    Args:
+        alt_depth_valid: whether this BAM contains every read that aligned to the
+            LRC alt contigs. True for a slice taken straight out of a CRAM. False
+            for a BAM built by realigning a regional extraction — see
+            :func:`_call_lilra3` for what that costs and why the junction assay
+            is used instead.
+    """
     calls = [
         _call_unique_window(sample, "LILRA6", bam, model,
                             reference=reference, samtools=samtools),
         _call_unique_window(sample, "LILRB3", bam, model,
                             reference=reference, samtools=samtools),
-        _call_lilra3(sample, bam, model, reference=reference, samtools=samtools),
+        _call_lilra3(sample, bam, model, reference=reference, samtools=samtools,
+                     alt_depth_valid=alt_depth_valid),
     ]
     _pair_check(calls, bam, model, reference=reference, samtools=samtools)
     return calls
@@ -299,7 +309,8 @@ def _call_unique_window(sample: str, gene: str, bam: str, model: CoverageModel,
 
 
 def _call_lilra3(sample: str, bam: str, model: CoverageModel, *,
-                 reference: str | None, samtools: str) -> CNCall:
+                 reference: str | None, samtools: str,
+                 alt_depth_valid: bool = True) -> CNCall:
     """LILRA3 by two independent routes, preferring depth and checking it.
 
     Depth is preferred because it is a direct measurement over 6.7 kb, where the
@@ -307,6 +318,28 @@ def _call_lilra3(sample: str, bam: str, model: CoverageModel, *,
     an Alu. But the depth route needs the alt contigs in the CRAM's reference,
     and where they are absent the junction is all there is — so the fallback is
     real, not decorative.
+
+    ``alt_depth_valid=False`` is the second reason that route can be unavailable,
+    and it is not visible in the BAM the way a missing contig is. The MAPQ-0
+    alt-contig depth counts supplementary records, and on HG00138's CRAM slice
+    135 of the 964 reads with an alt-contig record have **no primary record in
+    the LRC at all** — their primaries are scattered over chr2, chr3, chrX and
+    the rest of the genome, repeat-derived reads with a supplementary hit on the
+    LILRA3 contigs. A BAM built by extracting the LRC and realigning cannot
+    contain them: the FASTQ step drops supplementary records, because emitting
+    one would write a read twice, so a read whose *only* slice record is
+    supplementary disappears.
+
+    That is a 21% loss of alt-contig records on HG00138 (1,825 -> 1,448) and it
+    is systematic: across 88 samples the realigned estimate is a median 0.404
+    copies below the CRAM-as-is one and never above it, turning 19 true CN 2
+    calls into CN 1. The depth route's calibration includes that repeat-derived
+    component; a regional extraction excludes it; the same threshold cannot
+    serve both. The junction assay is unaffected — it reads clipping at
+    chr19:54,297,005, which is inside any LRC extraction — and reproduces
+    itself across the two (HG00138: 47 clipped/0 spanning as-is, 45/0
+    realigned, estimate 2.00 both ways). So it is used outright rather than as a
+    cross-check.
     """
     call = CNCall(sample=sample, gene="LILRA3", method="alt_depth_q0")
 
@@ -334,9 +367,11 @@ def _call_lilra3(sample: str, bam: str, model: CoverageModel, *,
     # primary assembly that is where essentially all of its evidence sits. On
     # HG00099, 481 of 547 records over one alt interval are supplementary;
     # excluding them made a two-copy donor read as a deletion homozygote.
-    measured = _mean_depth(bam, loci.LILRA3_ALT, loci.MAPQ_ANY,
-                           reference=reference, samtools=samtools,
-                           supplementary=True)
+    measured = None
+    if alt_depth_valid:
+        measured = _mean_depth(bam, loci.LILRA3_ALT, loci.MAPQ_ANY,
+                               reference=reference, samtools=samtools,
+                               supplementary=True)
 
     if measured is not None and lrc_q0:
         depth, n_bases = measured
@@ -357,8 +392,12 @@ def _call_lilra3(sample: str, bam: str, model: CoverageModel, *,
         call.estimate = junction_estimate
         call.method = "junction"
         call.notes.append(
-            "no alt-contig depth (the CRAM's reference has no LRC alt contigs); "
-            "called from the deletion junction alone"
+            "called from the deletion junction alone; the alt-contig depth route "
+            + ("is not valid on a BAM built from a regional extraction, which "
+               "cannot hold the genome-wide reads whose supplementary alignments "
+               "that route counts"
+               if not alt_depth_valid else
+               "is unavailable (the CRAM's reference has no LRC alt contigs)")
         )
 
     if call.estimate is None:

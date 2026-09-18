@@ -439,3 +439,107 @@ not producing genotypes at random, and this check needs no truth set at all.
 
 The frequently quoted "~24% LILRA3 deletion" is a European-weighted figure. At CHB and JPT
 the deleted allele is the **major** one, at three quarters.
+
+---
+
+## 12. Extract and realign: making ALT-awareness ours instead of the input's
+
+Everything above reads depth out of the alignment the CRAM arrived in, so every MAPQ-20
+number it reports is conditional on that alignment having been made against GRCh38 *with
+the `.alt` file*. For the 1000 Genomes 30× set that holds. Everywhere else it is an
+assumption, and §1.2's machinery can only detect that it was violated — turning LILRA6 and
+LILRB3 into `not_measured` — never repair it.
+
+`scripts/lilra6_cn.py` is a second front end that repairs it. The LRC and the control loci
+are pulled out of whatever alignment they arrived in, converted back to FASTQ, and
+realigned with `bwa mem -Y -K 100000000` against the analysis set and its alt index.
+Nothing downstream changes: `coverage.measure` and `cn.call_sample` take a BAM in GRCh38
+coordinates and do not care which aligner produced it. That is what makes the two paths
+comparable, and `validation/compare_realign.py` compares them.
+
+Three decisions are load-bearing:
+
+- **The extraction is the whole slice, not the cluster.** λ₁ comes from control loci up to
+  1.3 Mb outside the LILR genes. An extraction shaped for the targets realigns beautifully
+  and has no baseline to divide by. `loci.slice_intervals` already collects the union.
+- **The realignment is genome-wide.** Against an LRC-sized index a read whose true home is
+  a decoy or a KIR contig has nowhere else to go, so it lands in the LRC at MAPQ 60 and
+  inflates the window being measured. The cost is the index load, not the alignment.
+- **GRCh37 is refused, not lifted.** Chromosome 19 carries the same name in both
+  assemblies, so a name check passes and the extraction quietly returns a different
+  half-megabase. `realign.source_assembly` separates them by length — 58,617,616 against
+  59,128,983 — and raises.
+
+### What the 100-sample coherence run established
+
+The 100 non-validation 1000 Genomes samples of §9's companion draw, each already called
+from its CRAM as-is, recalled through extract-and-realign and scored against those calls.
+Same reads, same index, same copy-number code; one step differs.
+
+| gene | integer agreement | median Δestimate | worst Δ |
+|---|---|---|---|
+| LILRA6 | **100/100 (100%)** | +0.0000 | 0.0030 |
+| LILRB3 | **100/100 (100%)** | +0.0000 | 0.0010 |
+| LILRA3, via the junction | 97/100 (97.0%) | +0.0630 | +0.6130 |
+
+All 300 calls `measured`, every sample `alt_aware`, no status changes, nothing refused. The
+LILRA6 distribution is identical sample by sample, not merely in aggregate: 0:1 1:2 2:62
+3:32 4:3 on both sides.
+
+**This is a plumbing test, not a validation.** The realignment targets the index the input
+was aligned against, so near-identical placement is the expected result and what it rules
+out is that extraction, collation, re-pairing, singleton handling or the `-Y`/`-K` settings
+lost or moved reads. It does not show the pipeline works on an input aligned to something
+else; that needs an input aligned to something else. Against truth, §9 remains the score.
+
+### LILRA3's depth route cannot survive a regional extraction
+
+The first run disagreed at LILRA3 — 69/88, a median 0.404 copies **low and never high**,
+converting 19 true CN 2 calls to CN 1. The cause is specific and worth recording.
+
+That route counts MAPQ-0 alt-contig depth *including supplementary records*. On HG00138's
+CRAM slice, 135 of the 964 reads with an alt-contig record have no primary record in the
+LRC at all: their primaries are on chr2, chr3, chrX and across the genome — repeat-derived
+reads with a supplementary hit on the LILRA3 contigs. An extraction of the LRC cannot
+contain them, and the FASTQ step must drop supplementary records because emitting one
+writes a read twice. Measured: 1,825 alt-contig records as-is against 1,448 realigned,
+−21%, matching the estimate ratio 1.471/1.892 = 0.777 on that sample.
+
+So the depth route's calibration silently includes a genome-wide repeat component that a
+regional extraction excludes, and the same threshold cannot serve both. The junction assay
+is unaffected — it reads clipping at chr19:54,297,005, inside any LRC extraction — and
+reproduces across the two: HG00138 gives 47 clipped/0 spanning as-is and 45/0 realigned,
+estimate 2.00 either way. `cn.call_sample` now takes `alt_depth_valid`, and the realign
+path passes `False`.
+
+That took LILRA3 from 78.4% to 97.0%. The residual three are the junction assay's known
+behaviour at heterozygotes, not a new fault — grouped by the as-is copy number, the
+realigned junction estimate reads:
+
+| as-is CN | n | median | min | max |
+|---|---|---|---|---|
+| 0 | 7 | 0.000 | 0.000 | 0.067 |
+| 1 | 34 | 1.157 | 0.800 | 1.550 |
+| 2 | 59 | 2.000 | 2.000 | 2.000 |
+
+CN 0 and CN 2 are exact; CN 1 sits at 1.157 against the 1.12 recorded in `cn.py`, and its
+upper tail crosses the 1.5 rounding boundary three times. **LILRA3 from the realign path is
+therefore not equivalent to LILRA3 from a CRAM slice, and should not be reported as
+though it were.** Where the input is a GRCh38 ALT-aware CRAM, the as-is path is the better
+LILRA3 caller; the realign path exists for inputs where it is not available.
+
+### Cost
+
+~170 s per sample, dominated by loading the 5.3 GB bwa index rather than by aligning:
+`align_s` 53 s, `slice_s` 0.9 s on a staged slice. 100 samples ran as 25 SGE array tasks of
+4 at 8 slots, ~11 minutes each. The index is fetched, not built —
+`scripts/fetch_bwa_index.sh` takes EBI's, which is the one NYGC aligned against, so the
+comparison above is against the same index rather than an equivalent one.
+
+Two operational faults, both now fixed in `scripts/lilra6_array.sh` and worth naming
+because each returned a short cohort rather than an error. `mkdir -p` is not reliably
+idempotent across nodes on BeeGFS: 25 tasks racing to create one output directory lost
+three to "File exists", and under `set -e` that killed them before any work — the cohort
+came back 88/100 with three chunks simply absent. Tolerating EEXIST was not enough either;
+the next run lost one task to a `-d` test that returned false for a directory another node
+had already made, because the metadata had not propagated. It needs a retry loop.

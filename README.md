@@ -115,16 +115,100 @@ design decision, and the code says so where it matters:
    exactly like a homozygous deletion. The pipeline measures which case it is
    per sample instead of trusting the specification.
 
+## LILRA6 from CRAMs that were not aligned the way we would have aligned them
+
+Everything above reads depth straight out of the alignment the CRAM arrived in,
+so every MAPQ-20 number it reports is conditional on that alignment having been
+made against GRCh38 *with the `.alt` file*. For the 1000 Genomes 30× set that
+holds. Everywhere else it is an assumption, and the coverage model can only
+detect that it was violated — turning LILRA6 and LILRB3 into `not_measured` —
+never repair it.
+
+`scripts/lilra6_cn.py` repairs it. The LRC and the control loci are pulled out of
+whatever alignment they arrived in, converted back to FASTQ, and realigned with
+`bwa mem -Y` against the analysis set and its alt index. ALT-awareness becomes a
+property of this pipeline, asserted once by the presence of a file, rather than a
+property of every input that has to be measured per sample and can only be
+refused.
+
+```bash
+bash scripts/fetch_reference.sh              # 3.2 GB, once
+bash scripts/fetch_bwa_index.sh              # 5.3 GB, once — includes the .alt
+
+printf '%s\n' /data/*.final.cram > inputs.txt
+python3 scripts/lilra6_cn.py --inputs inputs.txt \
+    --reference resources/reference/GRCh38_full_analysis_set_plus_decoy_hla.fa \
+    --threads 8 --jobs 4 -o lilra6_cn.tsv
+
+qsub -t 1-25 scripts/lilra6_array.sh inputs.txt results/lilra6   # or on SGE
+```
+
+`--inputs` is one sample per line, with one, two or three whitespace-separated
+columns: the CRAM alone, the CRAM and its index, or an explicit sample name
+followed by both. Output is LILRA6 copy number; LILRB3 and LILRA3 land in a
+companion file, since LILRA6's cross-check is the pooled LILRA6+LILRB3 depth.
+
+Nothing downstream changed. `coverage.measure` and `cn.call_sample` take a BAM
+in GRCh38 coordinates and do not care which aligner produced it, so the copy
+number is computed exactly as it is for the CRAM-as-is path — which is what makes
+the two comparable, and `validation/compare_realign.py` compares them.
+
+### It reproduces the CRAM-as-is calls
+
+100 samples already called from their CRAMs, recalled through extract-and-realign
+and scored against those calls. Same reads, same index, same copy-number code;
+one step differs.
+
+| gene | integer agreement | median Δestimate | worst Δ |
+|---|---|---|---|
+| **LILRA6** | **100/100 (100%)** | +0.0000 | 0.0030 |
+| LILRB3 | **100/100 (100%)** | +0.0000 | 0.0010 |
+| LILRA3, via the junction | 97/100 (97.0%) | +0.0630 | +0.6130 |
+
+All 300 calls `measured`, every sample `alt_aware`, nothing refused. This is a
+plumbing test rather than a validation: the realignment targets the index the
+input was aligned against, so what it rules out is that extraction, collation,
+re-pairing or singleton handling lost reads — not that the pipeline works on an
+input aligned to something else. Against truth, `validation/` remains the score.
+PLAN.md §12 has the detail.
+
+**LILRA3 is the exception, and it is not a small one.** Its depth route counts
+MAPQ-0 alt-contig depth including supplementary records, and on HG00138 135 of
+the 964 reads with an alt-contig record have no primary in the LRC at all —
+their primaries are scattered across chr2, chr3, chrX, repeat-derived reads with
+a supplementary hit on the LILRA3 contigs. A regional extraction cannot hold
+them, so realigning loses 21% of that depth and reads true CN 2 as CN 1. The
+realign path therefore calls LILRA3 from the deletion junction instead, which is
+unaffected — but the junction is weakest at heterozygotes, and the three
+residual errors are all CN 1 read as CN 2. **Where the input is a GRCh38
+ALT-aware CRAM, the as-is path is the better LILRA3 caller.** This path exists
+for inputs where that is not available.
+
+Two further limits. The extraction is only as complete as the alignment it
+reads from, so a read the input aligner put outside these intervals is not there
+to be rescued; and duplicates remain the input's judgement, excluded on the flags
+that arrive and never recomputed, because duplicate detection needs the whole
+library and a 550 kb slice is not it. A GRCh37 input is **refused**, not
+lifted: chromosome 19 carries the same name in both assemblies, so extracting
+anyway would return a different half-megabase and call copy number on whatever
+lives there.
+
 ## Requirements
 
 ```bash
 micromamba create -y -f environment.yml && micromamba activate lilr-wgs
-bash scripts/check_env.sh          # asserts samtools has libcurl, etc.
+bash scripts/check_env.sh          # asserts samtools has libcurl, the .alt, etc.
 ```
 
 `samtools` **must** be built with libcurl — reading CRAMs over HTTPS is the
 front end. The check script fails loudly if it is not, because without it the
 failure surfaces as a bare "fail to open file" that reads like a bad path.
+
+`{reference}.alt` must be beside the bwa index for the realignment path. `bwa`
+gives no error when it is missing; it simply aligns without ALT-awareness, and
+every MAPQ-20 window in the LRC then reads near zero for every sample alike. The
+check script warns, and `lilra6_cn.py` refuses to report a number rather than
+reporting zero.
 
 ## Provenance
 

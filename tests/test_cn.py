@@ -354,9 +354,22 @@ class TestCopyNumberDoesNotReadTheRecruitmentPanel:
     again, and nothing in the output would look any different. PLAN.md §10.
     """
 
+    # Every name here has been checked to carry no recruited read and no panel
+    # alignment. Adding to this set is a deliberate act, which is the point of
+    # asserting the whole set rather than a subset:
+    #
+    #   sample, bam, model, reference, samtools -- the original five.
+    #   alt_depth_valid -- a bool about where `bam` came from, not about what is
+    #       in it. False says the BAM was built by realigning a regional
+    #       extraction, so LILRA3's alt-contig depth route is unavailable and the
+    #       junction assay is used. It carries no depth, no panel and no
+    #       cohort; it selects between two routes that were already here.
+    ALLOWED_INPUTS = {"sample", "bam", "model", "reference", "samtools",
+                      "alt_depth_valid"}
+
     def test_call_sample_is_given_the_slice_and_the_model_and_nothing_else(self):
         params = set(inspect.signature(call_sample).parameters)
-        assert params == {"sample", "bam", "model", "reference", "samtools"}, (
+        assert params == self.ALLOWED_INPUTS, (
             f"call_sample's inputs have changed to {sorted(params)}. If one of "
             "them carries recruited reads, copy number is no longer independent "
             "of the panel and the leave-one-donor-out score stops meaning what "
