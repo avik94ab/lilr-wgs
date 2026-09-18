@@ -553,3 +553,90 @@ three to "File exists", and under `set -e` that killed them before any work — 
 came back 88/100 with three chunks simply absent. Tolerating EEXIST was not enough either;
 the next run lost one task to a `-d` test that returned false for a directory another node
 had already made, because the metadata had not propagated. It needs a retry loop.
+
+---
+
+## 13. T2T-CHM13v2.0: the assembly that has LILRA3
+
+§12 ends with LILRA3 unreportable from the realigning front end. The cause is
+structural rather than incidental: GRCh38's chr19 carries the common ~6.7 kb
+deletion, so LILRA3 exists only on alt contigs, and reading it there means MAPQ-0
+depth across four near-identical haplotypes while counting supplementary
+records — reads whose primaries are scattered genome-wide and which a regional
+extraction therefore cannot hold.
+
+CHM13v2.0 carries the insertion allele, so LILRA3 is ordinary single-copy primary
+sequence there, measurable at MAPQ 20 like any other gene. That dissolves the
+problem instead of working around it.
+
+**Measured, not assumed.** The 7,126 bp calling reference aligns to
+chr19:57,377,084-57,384,209 at 7,126/7,126 identity, reverse-complemented, MAPQ
+60; every other hit in the region is a partial paralogue at 59-87%. Independently,
+the LILRB2→LILRA5 gap is 33,384 bp in CHM13 against 25,959 in GRCh38 — 7,425 bp
+wider, about one LILRA3.
+
+**The annotation is not evidence here.** `chm13v2.0_RefSeq_Liftoff_v5.1.gff3` does
+not list LILRA3, and that is an artefact of its provenance: it is lifted from the
+GRCh38 primary assembly, which has no LILRA3 to lift. Recorded in three places
+because it reads as contrary evidence and is not.
+
+### The unique windows were transferred, and the reason is a negative result
+
+Re-deriving them looked obviously right and was wrong. Running the documented
+criterion — a 100-mer is ambiguous if another within 3 mismatches exists anywhere
+in the LRC on either strand — against **GRCh38** does not reproduce
+`loci.UNIQUE_WINDOWS`: it matches their starts exactly (54,236,589 and
+54,218,251) but runs longer and finds extra windows, 4,003 bp against 2,900 at
+LILRA6 and 3,539 against 1,881 at LILRB3. So `lilrCN_aou` applied something
+stricter than the criterion as written, and LILRA6's validated accuracy rests on
+the stricter version.
+
+Transferring the validated sequence keeps the definition that earned that
+accuracy and changes only the assembly it is expressed in. All four windows moved
+at ≥0.9975 identity with their lengths preserved exactly, and the independent
+scan — kept as an audit rather than as the source — finds them still unique in
+CHM13 at 0.0%, 0.0%, 0.4% and 0.0% ambiguous.
+
+Had that check been skipped, LILRA6 would have been measured on a different
+definition of "unique" and nothing in the output would have looked different.
+
+### What the 100-sample run established
+
+The same 100 samples as §12, realigned to CHM13 and measured with the CHM13
+table, scored against the calls made from their GRCh38 CRAMs as-is.
+
+| | integer agreement | median Δestimate | worst Δ |
+|---|---|---|---|
+| LILRA6 | **99/100 (99.0%)** | +0.0140 | +0.0390 |
+
+All 100 `measured`, nothing refused, no status changes. The distributions differ
+by exactly the one sample:
+
+| CN | CHM13 | GRCh38 |
+|---|---|---|
+| 0 | 1 | 1 |
+| 1 | 2 | 2 |
+| 2 | 62 | 62 |
+| 3 | 31 | 32 |
+| 4 | 4 | 3 |
+
+**The one disagreement is the rounding band doing its job, not an error.**
+HG04239 reads 3.493 on GRCh38 and 3.513 on CHM13 — a difference of 0.020, which
+is the ordinary size of the shift, landing on opposite sides of 3.5. Both sides
+flag it `ambiguous`, at confidence 0.014 and 0.027. A caller that rounds has to
+put boundary cases somewhere; what matters is that it says so, and it does.
+
+The shift is an order of magnitude larger than §12's ±0.003, and that is correct
+rather than concerning: §12 realigns against the index the input was already
+aligned to, so near-identity is expected. Here λ₁ comes from different control
+loci in a different assembly, so the two measurements are genuinely independent
+and agreeing to a median 0.014 copies is the informative result.
+
+### Cost
+
+~230 s per sample against GRCh38's ~170 s, dominated by loading a 4.7 GB index
+that is cold on first touch — the second sample in a task takes ~140 s once the
+page cache is warm, which is the argument for chunking. The index is built, not
+fetched: no prebuilt bwa index is published for CHM13 (checked; the analysis_set
+and indexes/ paths 404), and `bwa index` takes ~50 minutes. There is no `.alt`
+file and there should not be, which is most of the point.
