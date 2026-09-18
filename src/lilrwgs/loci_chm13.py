@@ -104,6 +104,22 @@ LILRA3_SPAN = 7_126
 # ordinary ~35x. 6,764 bp against the 6.7 kb of Norman et al. 2003.
 LILRA3_DELETION = (CHROM, 57_379_392, 57_386_156)
 
+# The part of the deletion that is worth measuring: the deleted sequence that is
+# also inside the gene, and so also mappable.
+#
+# The deletion's last ~1.9 kb lies beyond the gene's 3' boundary and is
+# Alu-derived -- unsurprisingly, since the breakpoint sits in an Alu -- so it
+# reads near-zero at MAPQ 20 in *everyone*, carrier or not. Measured on
+# HG00119, a two-copy sample: 40.1x over the deleted part of the gene and 8.3x
+# over that tail, against a lambda_1 of 18.3. Including the tail does not add
+# signal, it dilutes: the full deletion reads 31.0x, putting a two-copy sample
+# at 1.70 instead of 2.20.
+#
+# So the window is deleted AND mappable. Both halves are load-bearing -- the
+# gene alone floors a homozygote at 0.65 because 2.3 kb of it survives the
+# deletion, and the deletion alone drags a two-copy sample to 1.70.
+LILRA3_MEASURED = (CHROM, 57_379_392, 57_384_209)
+
 # The part of LILRA3 that survives the deletion, present at two copies in
 # everyone. A QC probe, not a target -- the counterpart of
 # lilrwgs.loci.LILRA3_RETAINED. If this does not read flat near lambda_1 x 2,
@@ -177,7 +193,7 @@ UNIQUE_WINDOWS = {
     # family member, lacking the transmembrane and cytoplasmic domains, not a
     # recent duplicate of a neighbour the way LILRA6 and LILRB3 are of each
     # other.
-    "LILRA3": [(CHROM, 57_379_392, 57_386_156)],   # 6,764 bp, 9.5% ambiguous
+    "LILRA3": [LILRA3_MEASURED],                   # 4,817 bp, deleted+mappable
 }
 
 # ---------------------------------------------------------------------------
