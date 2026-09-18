@@ -20,7 +20,19 @@ takes it with no flag: re-slicing an already-sliced BAM is a local no-op.
 
 Costs ~12 MB and ~20 s of network per sample, and it is resumable — a sample
 whose slice is already present and non-empty is skipped, so an interrupted run
-costs only what it had not finished.
+costs only what it had not finished. Resume rather than restart, because at
+scale a first pass does not finish: 2,504 samples at `--jobs 16` produced 293
+`hts_itr_multi_next` seek failures against EBI, and a second pass at `--jobs 8`
+recovered 291 of them. Treat a failure list as a work queue, not as bad samples.
+
+The two that did not recover were not transient and are worth naming, because
+the error blames the index format and the cause is the mirror. EBI serves
+`HG03931.final.cram.crai` as a redirect to a directory and `HG04194`'s as a
+4,096-byte stub, where ENA's own file report says both should be ~1.35 MB. The
+same two indexes are intact on the AWS public mirror, which is a drop-in for the
+`cram`/`crai` columns and was also faster:
+
+    https://s3.amazonaws.com/1000genomes/1000G_2504_high_coverage/data/{run}/{sample}.final.cram
 
 Deliberately network-bound and nothing else: no coverage model, no copy number.
 Those are CPU, they belong on the cluster, and keeping them out of here means the

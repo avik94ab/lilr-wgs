@@ -1,0 +1,33 @@
+LILRA6 copy number vs JoGo-LILR published calls
+  our calls          2504
+  their published    3202
+  in both            2504
+  refused by us      0 (status != measured; not scored either way)
+
+agreement 2497/2504 = 99.7%
+
+confusion (their CN down, ours across)
+            0      1      2      3      4      5      6      7
+    0      11      0      0      0      0      0      0      0
+    1       0    170      0      0      0      0      0      0
+    2       0      0   1482      0      0      0      0      0
+    3       0      0      0    666      3      0      0      0
+    4       0      0      0      0    135      0      0      0
+    5       0      0      0      0      1     27      2      0
+    6       0      0      0      0      0      0      6      0
+    7       0      0      0      0      0      0      1      0
+
+disagreements
+  sample     theirs  ours  estimate   conf  flagged
+  HG00238         3     4     3.602  0.203  True
+  HG00315         3     4     3.508  0.017  True
+  HG00742         7     6     6.975    0.0  True
+  HG01187         3     4     3.645   0.29  True
+  HG01619         5     4     4.084  0.832  False
+  NA18933         5     6     5.864  0.727  False
+  NA20827         5     6     5.539  0.079  True
+
+Read with the caveats in validation/jogo_crosscheck.md: LILRB3 is not
+scored here because their anchor grid makes agreement there nearly
+automatic, and both methods are being compared on a cohort drawn from
+the same 1000 Genomes collection their background table is built from.

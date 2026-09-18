@@ -46,44 +46,82 @@ r = 0.999, with a systematic offset of +0.167 in X.
 
 ## Result
 
-Two cohorts of 100, drawn disjoint from each other and from the 101 HPRC
-validation donors (`config/manifest.kgp100.tsv`, seed 20260917;
-`config/manifest.kgp100b.tsv`, seed 202609172), against the paper's published
-LILRA6 copy number for the same samples:
+Every sample in the 1000 Genomes 30x collection — **2,504**, all of them in their
+3,202-sample published table — against the paper's LILRA6 copy number:
+
+**2,497/2,504 = 99.7% agreement**, with no sample refused by either side.
+
+Split by whether this pipeline flagged the call as ambiguous, which is what the
+flag is for:
+
+| | n | agree |
+|---|---|---|
+| confident | 2,125 | 2,123 (99.9%) |
+| flagged | 379 | 374 (98.7%) |
+
+All seven disagreements sit at CN >= 3, where 30x separates adjacent copy numbers
+by ~15x of depth, and five of the seven are flagged:
+
+| sample | theirs | ours | our estimate | confidence | flagged |
+|---|---|---|---|---|---|
+| HG00238 | 3 | 4 | 3.602 | 0.203 | yes |
+| HG00315 | 3 | 4 | 3.508 | 0.017 | yes |
+| HG00742 | 7 | 6 | 6.975 | 0.000 | yes |
+| HG01187 | 3 | 4 | 3.645 | 0.290 | yes |
+| HG01619 | 5 | 4 | 4.084 | 0.832 | no |
+| NA18933 | 5 | 6 | 5.864 | 0.727 | no |
+| NA20827 | 5 | 6 | 5.539 | 0.079 | yes |
+
+NA20827 is the one sample that also disagreed with the HPRC assembly truth set,
+in the same direction and by the same amount: truth 5, ours 6 (`PLAN.md` §9).
+Two methods that share no failure mode now say 5, so that is a genuine miss and
+not a truth-set artefact — the only one either exercise has produced.
+
+Before the full cohort was run, the same comparison was made on two disjoint
+100-sample draws that share no donor with the 101 HPRC validation donors
+(`config/manifest.kgp100.tsv`, seed 20260917; `config/manifest.kgp100b.tsv`, seed
+202609172), which is the version to cite where the panels matter:
 
 | route | kgp100 | kgp100b |
 |---|---|---|
 | **lilr-wgs vs their published calls** | **100/100** | **100/100** |
 | their caller on their coverage, vs their published calls | 100/100 | 100/100 |
-| their caller on our slices (λ₁-normalised), vs published | 100/100 | 98/100 |
+| their caller on our slices (lambda1-normalised), vs published | 100/100 | 98/100 |
 
-**200/200 on LILRA6**, across CN 0 to 5, in two cohorts drawn a day apart.
+The two misses in the last row are the lambda1-substitution route, not this
+pipeline: HG00178 (called 5, published 4) and HG02805 (3, published 2), both one
+copy high, both consistent with the +0.167 offset in X pushing a borderline
+sample over an anchor boundary. `lilr-wgs` called both correctly and flagged both
+as low confidence (0.48 and 0.33), which is what measuring the unique window
+directly rather than going through the pair total buys.
 
-The two misses in the last row are the λ₁-substitution route, not this pipeline:
-HG00178 (called 5, published 4) and HG02805 (3, published 2), both one copy high,
-both consistent with the +0.167 offset in X pushing a borderline sample over an
-anchor boundary. `lilr-wgs` called both correctly and flagged both as low
-confidence (0.48 and 0.33), which is what measuring the unique window directly
-rather than going through the pair total buys.
+Outputs: `validation/reports/jogo_kgp2504.txt` for the full cohort;
+`results/kgp100/lilra6_cn_jogo.tsv` and `results/kgp100b/lilra6_cn_jogo.tsv` for
+the two 100-sample routes, which carry per-sample X and Y from each route beside
+the calls. Reproduce the full-cohort report with:
 
-Outputs: `results/kgp100/lilra6_cn_jogo.tsv` and
-`results/kgp100b/lilra6_cn_jogo.tsv` (under `results/`, so untracked). Both carry
-per-sample X and Y from each route beside the calls.
+```bash
+python validation/compare_jogo.py results/kgp2504/cn_calls.tsv \
+    --published $JOGO/test/paper.hapmap3202.allele_stable.tsv \
+    -o validation/reports/jogo_kgp2504.txt
+```
 
 ## What this does not establish
 
-**LILRB3 agreement is much weaker evidence than the LILRA6 figure**, and the
-100/100 there should not be quoted alongside it. Their `diploid_stable` anchor
-grid contains only B1/B2 haplotype types, so LILRB3 CN 2 is very nearly what the
-method is able to return; agreeing with it is close to agreeing that most people
-have two copies of LILRB3, which both methods would manage without being right
-about anything.
+**LILRB3 agreement is much weaker evidence than the LILRA6 figure** and should
+not be quoted alongside it. Their `diploid_stable` anchor grid contains only
+B1/B2 haplotype types, so LILRB3 CN 2 is very nearly the only answer the method
+can return — and this pipeline calls 2,500 of 2,504 samples CN 2 as well.
+Agreeing there is close to agreeing that most people have two copies of LILRB3,
+which both methods manage without being right about anything. `compare_jogo.py`
+therefore scores LILRA6 and declines to score LILRB3 at all.
 
 The comparison is also on **copy number only**. Neither the paper's calls nor
 ours are haplotype sequences, and the allele-type strings the two methods emit
 are not in the same vocabulary.
 
-Finally, the reference table is 1000 Genomes. Both cohorts are drawn from it, so
-this says nothing about a cohort whose ancestry composition is different from
-theirs — which for a cohort-relative method is a live question, and for this one
-is the thing λ₁ is supposed to make moot.
+Finally, their background table *is* 1000 Genomes, and the comparison is now the
+whole of it. So this says nothing about a cohort whose ancestry composition
+differs from theirs — a live question for a cohort-relative method, and the thing
+λ₁ is meant to make moot for this one. The honest reading of 99.7% is that the
+two methods agree on the samples their method was calibrated on.

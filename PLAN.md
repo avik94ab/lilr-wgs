@@ -385,3 +385,57 @@ number needs. Open question 3 — whether the shared-block machinery yields usab
 *sequence* at those two genes, as opposed to usable depth — is where this exercise has
 teeth, and it is still open. The panels, the per-donor indices and the staged slices are all
 built, so the expensive part of that run is already paid for.
+
+---
+
+## 11. The whole collection: 2,504 samples
+
+Copy number for every sample in the 1000 Genomes 30× set. Staged with
+`scripts/stage_slices.py` and called with `scripts/cn_array.sh` — 157 SGE array tasks of 16
+samples at 4 slots — because the deliverable is copy number and `portable/lilr_cn.py`
+produces it without recruiting reads against the panels, which is most of the per-sample
+cost and none of what a copy number is made of. Every call `measured`, every sample
+`alt_aware`, nothing refused.
+
+| gene | CN distribution |
+|---|---|
+| LILRA6 | 0:11 1:170 2:1482 3:666 4:139 5:27 6:9 |
+| LILRB3 | 1:3 2:2500 3:1 |
+| LILRA3 | 0:210 1:680 2:1614 |
+
+**Against JoGo-LILR's published calls for the same 2,504 samples: 2,497 agree, 99.7%**
+(`validation/jogo_crosscheck.md`). Confident calls 2,123/2,125 = 99.9%, flagged calls
+374/379 = 98.7% — the flag separating a 1-in-1,000 error rate from a 1-in-77 one is the
+argument for keeping the two products distinct rather than reporting one accuracy.
+
+Staging, not calling, is the cost and the risk. 2,504 samples at `--jobs 16` left 293
+`hts_itr_multi_next` seek failures against EBI; a second pass at `--jobs 8` recovered 291.
+The last two were not transient — EBI serves a redirect-to-directory for one `.crai` and a
+4,096-byte stub for the other, where ENA's file report says both are ~1.35 MB — and both
+are intact on the AWS public mirror, which is a drop-in for the manifest's URL columns. The
+whole cohort is ~3.5 h of staging on a login node and ~25 minutes of wall clock on 157
+concurrent 4-slot jobs.
+
+### Hardy-Weinberg, as an internal check with no truth set
+
+LILRA3's deletion allele frequency across the collection is 0.220 (1,100/5,008), and the
+pooled genotype counts miss Hardy-Weinberg badly — 210/680/1,614 observed against
+121/858/1,525 expected. That is Wahlund rather than a calling artefact, and the way to
+tell is to stop pooling:
+
+| population | n | CN 0/1/2 | deletion AF | χ² (1 df) |
+|---|---|---|---|---|
+| AFR | 661 | 8/94/559 | 0.083 | 3.0 |
+| AMR | 347 | 22/126/199 | 0.245 | 0.1 |
+| EUR | 503 | 13/153/337 | 0.178 | 0.8 |
+| SAS | 489 | 10/108/371 | 0.131 | 0.4 |
+| EAS | 504 | 157/199/148 | 0.509 | 22.2 |
+
+EAS is the same effect one level down — it pools CHB (AF 0.752) and JPT (0.755) with CDX
+(0.140) and KHV (0.318) — and every one of its five populations fits on its own: χ² of
+0.50, 1.50, 0.70, 0.16 and 0.88 for CDX, CHB, CHS, JPT and KHV. A caller that reproduces
+Hardy-Weinberg in 26 populations independently, at frequencies spanning 0.08 to 0.76, is
+not producing genotypes at random, and this check needs no truth set at all.
+
+The frequently quoted "~24% LILRA3 deletion" is a European-weighted figure. At CHB and JPT
+the deleted allele is the **major** one, at three quarters.

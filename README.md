@@ -38,13 +38,18 @@ loci before a panel is ever opened, so it cannot be inflated that way. `PLAN.md`
 §10 has the numbers. The circularity is real for allele *sequence*, which does
 run through recruitment, and that is not yet scored.
 
-Copy number has also been checked against a second, unrelated method:
-[JoGo-LILR](https://doi.org/10.1016/j.humimm.2025.111272) (Nagasaki et al. 2025),
-which is cohort-relative and reads the LILRB3+LILRA6 pair total rather than the
-paralogue-unique window, agrees on LILRA6 for **200/200** 1000 Genomes samples
-across two disjoint cohorts that share no donor with the HPRC overlap.
-[`validation/jogo_crosscheck.md`](validation/jogo_crosscheck.md) has the numbers
-and the one claim that exercise does *not* support.
+Copy number has also been checked against a second, unrelated method, on the
+whole collection. [JoGo-LILR](https://doi.org/10.1016/j.humimm.2025.111272)
+(Nagasaki et al. 2025) is cohort-relative and reads the LILRB3+LILRA6 pair total
+rather than the paralogue-unique window, so it fails differently; across **all
+2,504** 1000 Genomes samples the two agree on LILRA6 for **2,497, or 99.7%** —
+99.9% on the calls this pipeline reports as confident and 98.7% on the ones it
+flags. [`validation/jogo_crosscheck.md`](validation/jogo_crosscheck.md) has the
+seven disagreements and the one claim the exercise does *not* support.
+
+The same run reproduces Hardy-Weinberg for the LILRA3 deletion independently in
+all 26 populations, at frequencies from 0.08 to 0.76 — a check that needs no
+truth set. `PLAN.md` §11.
 
 ## Just the copy number, on any cluster
 
