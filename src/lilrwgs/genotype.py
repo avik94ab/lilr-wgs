@@ -44,6 +44,7 @@ from pathlib import Path
 
 from . import callability
 from .assign import DEFAULT_SHARED_GROUPS, read_shared_names
+from .depth_model import HET_RATIO, MIN_DP_FINAL, MIN_DP_SETUP
 from .sequences import extract_sequences
 from .shell import ToolError, require, run
 
@@ -154,6 +155,9 @@ def process(
     gc_lookup=None,
     alpha: float = 0.005,
     min_mapq_fraction: float = 0.5,
+    het_ratio: float = HET_RATIO,
+    min_dp: int | None = MIN_DP_FINAL,
+    min_dp_setup: int | None = MIN_DP_SETUP,
     threads: int = 2,
     gatk: str = "gatk",
     whatshap: str = "whatshap",
@@ -209,20 +213,38 @@ def process(
     evidence = callability.gather_evidence(rg_bam, len(ref_seq),
                                            shared_names=shared_names)
     gc_by_pos = callability.gc_by_position(ref_seq) if gc_lookup else None
-    calls = callability.classify(
-        evidence, copies=copies, lambda1=lambda1, dispersion=dispersion,
-        paralog_copies=paralog_copies, alpha=alpha,
-        min_mapq_fraction=min_mapq_fraction,
-        gc_by_pos=gc_by_pos, gc_lookup=gc_lookup,
-    )
+    # Two stages, after PING: permissive while discovering candidates, strict
+    # at output. PING runs setup.minDP=8 / final.minDP=20; here it is 6 and 10,
+    # lower because this is 30x WGS rather than capture at several hundred x.
+    #
+    # The predecessor also had two numbers -- masking the consensus at 15 and
+    # filtering variants at 20 -- and that was a defect, because a position in
+    # [15, 20) survived the mask and lost its call, so the consensus asserted a
+    # base the VCF did not support. The difference here is which pair of things
+    # share a threshold: discovery is looser than output, but the mask and the
+    # variant filter are both driven by `calls_final`, so they cannot disagree.
+    def _classify(min_dp):
+        return callability.classify(
+            evidence, copies=copies, lambda1=lambda1, dispersion=dispersion,
+            paralog_copies=paralog_copies, alpha=alpha,
+            min_mapq_fraction=min_mapq_fraction,
+            gc_by_pos=gc_by_pos, gc_lookup=gc_lookup, min_dp=min_dp)
+
+    calls_setup = _classify(min_dp_setup)
+    calls = _classify(min_dp)          # final: the track, the mask, the filter
+
     contig = _contig_name(ref_fa)
     result.callability = callability.write_track(
         out_sample / f"{locus}.callability.tsv.gz".replace(".gz", ""),
         contig, evidence, calls)
     result.callable_fraction = result.callability["callable_fraction"]
 
+    # What HaplotypeCaller may consider: the permissive set.
     bed = work / "callable.bed"
-    n_callable = callability.callable_bed(bed, contig, calls)
+    n_callable = callability.callable_bed(bed, contig, calls_setup)
+    # What survives into the VCF and the consensus: the strict set.
+    final_bed = work / "final.bed"
+    callability.callable_bed(final_bed, contig, calls)
     if n_callable == 0:
         result.status = "no_callable_positions"
         shutil.rmtree(work, ignore_errors=True)
@@ -248,7 +270,21 @@ def process(
     # reliable in a paralogous cluster at this depth and a wrong indel shifts
     # every downstream codon.
     filt_vcf = work / "filt.vcf.gz"
-    run(["bcftools", "view", "-V", "indels", "-T", str(bed),
+    # Allele balance, PING's `hetRatio`. A depth threshold cannot do this job:
+    # at perfectly adequate depth, one or two reads from a 97%-identical
+    # paralogue produce a heterozygote that passes any floor, and in this
+    # cluster that is a more common error than thin coverage. The expression
+    # requires the *minor* allele to carry at least `het_ratio` of the reads at
+    # the site, so a 30x position with 2 alt reads (6.7%) is rejected while a
+    # genuine het near 50% is kept.
+    #
+    # Applied only to sites that are actually called heterozygous -- a
+    # homozygous-variant site has no minor allele to balance, and requiring one
+    # would discard every one of them.
+    ab = (f'(GT="het" & (FMT/AD[0:1])/(FMT/DP) >= {het_ratio}) '
+          f'| GT!="het"')
+    run(["bcftools", "view", "-V", "indels", "-T", str(final_bed),
+         "-i", ab,
          "-Oz", "-o", str(filt_vcf), str(raw_vcf)])
     run(["bcftools", "index", "-f", str(filt_vcf)])
 

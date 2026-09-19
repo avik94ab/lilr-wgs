@@ -56,6 +56,39 @@ MIN_READS_PER_COPY = 5
 # unseparated paralogue produces and well above ordinary coverage variation.
 DEFAULT_ALPHA = 0.005
 
+# PING's two-stage depth thresholds, adopted here at this project's own values.
+#
+# PING (Hollenbach lab) runs `setup.minDP <- 8` while building candidate
+# genotypes and `final.minDP <- 20` when finalising them, applied flat as
+# `vcfDT[DP >= minDP]` — permissive during discovery so a variant is not lost
+# before it can be assessed, strict at output. `lilr-genotyper` uses 20 as well.
+#
+# The values here are 6 and 10, deliberately lower than both, because those
+# pipelines call KIR from targeted capture at several hundred x while this one
+# calls LILR at 30x, where the same constant is a much larger fraction of the
+# available evidence. The distributional floor at this project's measured λ₁
+# lands at 13 for a diploid locus (HG00119: λ₁ 18.39, efficiency 0.802,
+# dispersion 33.3), so 10 admits the band between them.
+#
+# **These are absolute floors and they replace the distributional bound when
+# supplied, rather than being taken alongside it.** That is a real departure
+# from the rest of this module, which exists to remove fixed depth constants,
+# and it is worth being explicit rather than quiet about: a flat floor does not
+# know the sample's coverage, so on a thin library it admits more than it should
+# and on a deep one it is nearly inert. The two-sided ceiling and the
+# copy-number scaling of `effective_copies` are untouched, so the paralogue
+# pile-up protection that a flat threshold has no opinion about still applies.
+MIN_DP_SETUP = 6         # candidate discovery: what HaplotypeCaller may consider
+MIN_DP_FINAL = 10        # output: what survives into the VCF and the consensus
+
+# Minimum fraction of reads supporting an allele for it to be called, PING's
+# `hetRatio`, at PING's value. This is the filter a depth threshold cannot
+# replace: at adequate depth, one or two reads from a 97%-identical paralogue
+# produce a false heterozygote that passes any floor, and only an allele-balance
+# requirement rejects it. In a cluster where LILRA6 and LILRB3 differ by ~3%,
+# that is the more common error than thin coverage.
+HET_RATIO = 0.25
+
 # Dispersion is estimated from control loci, where per-base depth varies for real
 # reasons (GC, mappability) on top of sampling noise. An estimate from too few
 # bases, or one that comes out under-dispersed, falls back to Poisson — which is
@@ -91,7 +124,7 @@ class DepthThresholds:
     ceiling: int
     alpha: float
     dispersion: float
-    floor_source: str       # "distribution" or "reads_per_copy"
+    floor_source: str       # "distribution", "reads_per_copy", "absolute"
 
     def classify(self, depth: float) -> Callability:
         if depth < self.floor:
@@ -168,7 +201,8 @@ def _normal_quantile(p: float) -> float:
 
 
 def thresholds_for(copies: int, lambda1: float, dispersion: float = math.inf,
-                   alpha: float = DEFAULT_ALPHA) -> DepthThresholds:
+                   alpha: float = DEFAULT_ALPHA,
+                   min_dp: int | None = None) -> DepthThresholds:
     """The depth interval a position at *copies* copies should fall in.
 
     Args:
@@ -199,13 +233,23 @@ def thresholds_for(copies: int, lambda1: float, dispersion: float = math.inf,
 
     distributional_floor = mean - z * sd
     per_copy_floor = MIN_READS_PER_COPY * copies
-    floor_source = ("reads_per_copy" if per_copy_floor >= distributional_floor
-                    else "distribution")
+
+    if min_dp is not None:
+        # PING-style absolute floor: flat, and it *replaces* the modelled bound
+        # rather than joining it, so asking for 10 gives 10 rather than the
+        # higher of 10 and whatever the distribution wanted. The ceiling below
+        # is left alone, so excess depth is still rejected.
+        floor_value = float(min_dp)
+        floor_source = "absolute"
+    else:
+        floor_value = max(distributional_floor, per_copy_floor)
+        floor_source = ("reads_per_copy" if per_copy_floor >= distributional_floor
+                        else "distribution")
 
     return DepthThresholds(
         copies=copies,
         expected=mean,
-        floor=max(1, math.ceil(max(distributional_floor, per_copy_floor))),
+        floor=max(1, math.ceil(floor_value)),
         ceiling=math.floor(mean + z * sd),
         alpha=alpha,
         dispersion=dispersion,
@@ -257,7 +301,7 @@ def call_position(depth: float, copies: int, lambda1: float,
                   *, dispersion: float = math.inf, alpha: float = DEFAULT_ALPHA,
                   shared_fraction: float = 0.0, paralog_copies: int = 0,
                   mapq_fraction: float = 1.0, min_mapq_fraction: float = 0.5,
-                  ) -> PositionCall:
+                  min_dp: int | None = None) -> PositionCall:
     """Classify one position.
 
     Order matters. MAPQ is checked first because a position whose reads are
@@ -291,7 +335,8 @@ def call_position(depth: float, copies: int, lambda1: float,
     # Thresholds are defined on integer copies; interpolating the interval would
     # imply a precision the model does not have, so round and carry the exact
     # effective value in the result for anyone who wants it.
-    t = thresholds_for(max(1, round(eff)), lambda1, dispersion, alpha)
+    t = thresholds_for(max(1, round(eff)), lambda1, dispersion, alpha,
+                       min_dp=min_dp)
     status = t.classify(depth)
 
     # A shared block that is over-covered even after accounting for the paralogue

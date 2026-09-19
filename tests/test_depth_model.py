@@ -14,15 +14,15 @@ import math
 import pytest
 
 from lilrwgs.depth_model import (
-    Callability,
     DEFAULT_ALPHA,
     MIN_READS_PER_COPY,
+    Callability,
+    _normal_quantile,
     call_position,
     effective_copies,
     estimate_dispersion,
     summarise,
     thresholds_for,
-    _normal_quantile,
 )
 
 # A 30x library: one haploid copy yields ~15 reads.
@@ -254,3 +254,91 @@ class TestAgainstSimulation:
         assert kept == pytest.approx(expected, abs=0.05), (
             f"copies={copies}: kept {kept:.3f}, expected ~{expected:.3f}"
         )
+
+
+class TestAbsoluteFloors:
+    """PING's two-stage `setup.minDP` / `final.minDP`, at this project's values.
+
+    PING runs 8 and 20 flat (`vcfDT[DP >= minDP]`); here it is 6 and 10, lower
+    because this is 30x WGS rather than capture at several hundred x. The
+    absolute floor *replaces* the modelled one when supplied — asking for 10
+    gives 10, not the higher of 10 and whatever the distribution wanted — and
+    that is the whole point of the option, so it is asserted rather than assumed.
+    """
+
+    LAM, DISP = 14.75, 33.31      # HG00119, after the efficiency conversion
+
+    def test_the_modelled_floor_is_higher_here(self):
+        """The premise: without an override the model asks for more than 10."""
+        t = thresholds_for(2, self.LAM, dispersion=self.DISP)
+        assert t.floor == 13 and t.floor_source == "distribution"
+
+    @pytest.mark.parametrize("min_dp", [6, 10])
+    def test_an_absolute_floor_replaces_rather_than_joins(self, min_dp):
+        t = thresholds_for(2, self.LAM, dispersion=self.DISP, min_dp=min_dp)
+        assert t.floor == min_dp
+        assert t.floor_source == "absolute"
+
+    def test_it_overrides_the_per_copy_floor_too(self):
+        """MIN_READS_PER_COPY x 2 = 10, so at min_dp=6 the per-copy floor would
+        win if the two were combined. It must not."""
+        t = thresholds_for(2, self.LAM, dispersion=self.DISP, min_dp=6)
+        assert t.floor == 6
+
+    def test_the_ceiling_is_untouched(self):
+        """A flat floor has no opinion about excess depth, and the pile-up
+        protection is the half of this model a constant cannot replace."""
+        modelled = thresholds_for(2, self.LAM, dispersion=self.DISP)
+        flat = thresholds_for(2, self.LAM, dispersion=self.DISP, min_dp=10)
+        assert flat.ceiling == modelled.ceiling
+
+    def test_the_floor_stops_scaling_with_copy_number(self):
+        """The cost of a flat floor, stated so it cannot be forgotten: at CN 4
+        the modelled floor is 36 because the expectation is 59, and an absolute
+        10 is 17% of that. In the LILRA6/LILRB3 shared block, where effective
+        copies reach 4, this admits positions carrying a sixth of their reads.
+        """
+        assert thresholds_for(4, self.LAM, dispersion=self.DISP).floor == 36
+        assert thresholds_for(4, self.LAM, dispersion=self.DISP,
+                              min_dp=10).floor == 10
+
+    def test_setup_is_permissive_relative_to_final(self):
+        from lilrwgs.depth_model import MIN_DP_FINAL, MIN_DP_SETUP
+        assert MIN_DP_SETUP < MIN_DP_FINAL
+
+    @pytest.mark.parametrize("depth,expected", [
+        (5, Callability.LOW_DEPTH), (6, Callability.OK),
+        (9, Callability.OK), (95, Callability.HIGH_DEPTH),
+    ])
+    def test_call_position_honours_the_setup_floor(self, depth, expected):
+        from lilrwgs.depth_model import MIN_DP_SETUP
+        c = call_position(depth, 2, self.LAM, dispersion=self.DISP,
+                          min_dp=MIN_DP_SETUP)
+        assert c.status is expected
+
+    @pytest.mark.parametrize("depth,expected", [
+        (9, Callability.LOW_DEPTH), (10, Callability.OK),
+    ])
+    def test_call_position_honours_the_final_floor(self, depth, expected):
+        from lilrwgs.depth_model import MIN_DP_FINAL
+        c = call_position(depth, 2, self.LAM, dispersion=self.DISP,
+                          min_dp=MIN_DP_FINAL)
+        assert c.status is expected
+
+
+class TestHetRatio:
+    """PING's `hetRatio`, at PING's value. The filter a depth threshold cannot
+    replace: at adequate depth, one or two reads from a 97%-identical paralogue
+    make a heterozygote that passes any floor."""
+
+    def test_it_matches_pings_value(self):
+        from lilrwgs.depth_model import HET_RATIO
+        assert HET_RATIO == 0.25
+
+    def test_a_paralogous_two_read_het_at_30x_would_be_rejected(self):
+        from lilrwgs.depth_model import HET_RATIO
+        assert 2 / 30 < HET_RATIO
+
+    def test_a_genuine_het_near_balance_is_kept(self):
+        from lilrwgs.depth_model import HET_RATIO
+        assert 14 / 30 >= HET_RATIO

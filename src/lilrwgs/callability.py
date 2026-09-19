@@ -88,7 +88,7 @@ def classify(evidence: list[PositionEvidence], *, copies: int, lambda1: float,
              dispersion: float, paralog_copies: int = 0,
              alpha: float = 0.005, min_mapq_fraction: float = 0.5,
              gc_by_pos: list[float] | None = None,
-             gc_lookup=None) -> list[PositionCall]:
+             gc_lookup=None, min_dp: int | None = None) -> list[PositionCall]:
     """Run the depth model over a gene's positions.
 
     Args:
@@ -109,7 +109,7 @@ def classify(evidence: list[PositionEvidence], *, copies: int, lambda1: float,
             lam = gc_lookup(gc_by_pos[i])
         calls.append(call_position(
             e.depth, copies=copies, lambda1=lam, dispersion=dispersion,
-            alpha=alpha, shared_fraction=e.shared_fraction,
+            alpha=alpha, min_dp=min_dp, shared_fraction=e.shared_fraction,
             paralog_copies=paralog_copies, mapq_fraction=e.mapq_fraction,
             min_mapq_fraction=min_mapq_fraction,
         ))
