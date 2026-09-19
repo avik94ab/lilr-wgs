@@ -218,6 +218,99 @@ lifted: chromosome 19 carries the same name in both assemblies, so extracting
 anyway would return a different half-megabase and call copy number on whatever
 lives there.
 
+## From copy number to allele sequence
+
+Copy number is the measurement this pipeline has validated. What follows it —
+calling the variants and assembling one sequence per haplotype — is built and
+**not yet verified**; see the caveat at the end of this section and
+[`docs/variant_calling.md`](docs/variant_calling.md) for exactly where the line
+falls.
+
+Taking copy number as given, the remaining problem is that the LILR genes are too
+similar for a read to say which one it came from. Three decisions follow, and all
+three are borrowed rather than invented.
+
+### Remove and rescue, not remove
+
+Reads are aligned against all eleven genes' panels, and each **pair** is scored by
+its summed alignment score. A pair goes to its single best gene. A pair within
+`--buffer` (default 2) of the best is cross-mapped, and the question is what to do
+with it.
+
+Discarding it is the obvious move and it is wrong. LILRA6 and LILRB3 share a
+~4.6 kb block with no gene-diagnostic 31-mers; LILRB1 and LILRB4 are ~92%
+identical across the cytoplasmic tail. In those blocks the tie is a **property of
+the genes**, not a defect of the read, and a competitive discard removes the block
+from both genes at once — 26% of the LILRB3 CDS in the capture cohort.
+
+So a tie confined to one `shared_group` is **kept in every tied gene** and tagged
+with how many genes claimed it. This is the *remove and rescue* pattern from
+[PING](https://github.com/Hollenbach-lab/PING), which comments out the negative
+filter for KIR2DL5A/B and shares one reference between them for the same reason,
+and it is ported from `lilr-genotyper`'s `filter_crossmapped.py` — where measuring
+the LILRA6/LILRB3 pair showed **99.87% of ties have a margin of exactly zero**,
+confirming the drop-on-tie policy was the defect rather than the buffer width.
+
+The verdict has to be written to `shared_pairs.tsv` rather than left in a BAM tag,
+because reads are recruited against a pangenome panel and called against a single
+reference, so a FASTQ sits between the two and tags do not survive it. The
+predecessor lost the information there.
+
+### Insufficient depth is a reported state, not a silent gap
+
+This is where the pipeline differs most from its predecessors, and it is the same
+argument as the copy-number path: **there is no fixed depth constant.**
+
+A position at copy number *k* is modelled as NB(*k*·λ₁, *k*·*r*), and the floor is
+
+```
+floor = max( k·λ₁ − z·σ ,  MIN_READS_PER_COPY × k )     α = 0.005
+```
+
+— the greater of a distributional bound and a per-haploid-copy minimum, both
+scaled by the locus's own copy number and by λ₁ measured in that same sample.
+At λ₁ ≈ 18 that is 21 reads at CN 2 under Poisson and 11 under real
+overdispersion, against the `DP >= max(20, 10·CN)` the predecessor applies
+regardless of coverage. At 30× a fixed 20 is not a filter, it is a mask over half
+the data — and not a random half, but the GC-extreme, paralogue-adjacent and
+repeat-flanked positions, which is where LILR genotypes actually differ.
+
+The gate is **two-sided**. A position at three times expected depth is an
+unseparated paralogue pile-up, and a heterozygote called there is a paralogous
+sequence variant wearing a heterozygote's clothes. `effective_copies()` keeps that
+ceiling from backfiring on the shared blocks, where reads are legitimately counted
+in both genes and the expectation is the pair's combined copy number.
+
+What happens to a position that fails:
+
+| | |
+|---|---|
+| it is excluded from `callable.bed` | so `HaplotypeCaller -L` never considers it, and the consensus and the variant call agree by construction rather than by two thresholds that can disagree |
+| the consensus base is masked to `N` | via `mask_sequence()` |
+| **the reason is recorded** | `low_depth`, `high_depth`, `low_mapq`, `paralog_ambiguous`, `no_model` |
+
+That last row is the point. The predecessor masked to a bare `N`, so an `N` in its
+output could equally mean "no reads", "reads but ambiguous", or a real deletion.
+Distinguishing those has more diagnostic value than the mask itself, and
+`callable_fraction` per (sample, gene) is what tells you whether a gene was
+*measured* or merely *not contradicted*.
+
+kir-mapper's documentation makes the complementary point from the other
+direction: its intron mode reports apparent novel alleles that are artifacts of
+repetitive regions. An allele call is only as good as the callability of the
+positions that distinguish it, which is why a sequence claim here requires every
+distinguishing position to be `ok` in the track — not merely non-`N`.
+
+### Status of this half
+
+The code exists and is not stubbed — `HaplotypeCaller` at `-ploidy` = copy number
+restricted to the callable track, `whatshap phase`/`polyphase` above CN 2,
+`bcftools consensus` per haplotype, then CDS/cDNA/protein. But `callability.py`,
+`genotype.py` and `sequences.py` carry no tests, and no allele sequence has been
+scored against truth. **Every accuracy figure quoted in this README is a copy
+number.** `docs/variant_calling.md` sets out what would have to happen to change
+that, and in what order.
+
 ## Requirements
 
 ```bash
@@ -245,4 +338,15 @@ reporting zero.
 - The extractor pattern, ratio-to-a-reference-locus copy number with a
   human-overridable threshold file, and the precedent for not competitively
   filtering an inseparable paralogue pair come from
-  [PING](https://github.com/Hollenbach-lab/PING).
+  [PING](https://github.com/Hollenbach-lab/PING) (Hollenbach lab), which
+  comments out the negative filter for KIR2DL5A/B and shares one reference
+  between them.
+- The paired-score cross-map arbitration with `shared_group` rescue is ported
+  from [`lilr-genotyper`](https://github.com/avik94ab/lilr-genotyper)'s
+  `filter_crossmapped.py`, including the `ZS:i:<n_tied>` tag that records how
+  many genes claimed a rescued pair.
+- [kir-mapper](https://github.com/erickcastelli/kir-mapper) is the cautionary
+  case for the allele-naming half: its intron mode reports apparent novel
+  alleles that are artifacts of repetitive regions, which is why a sequence
+  claim here requires the distinguishing positions to be `ok` in the
+  callability track rather than merely non-`N`.
