@@ -26,15 +26,28 @@ The test suite draws the line precisely:
 | `realign.py` | 495 | `test_realign.py` (44) | verified |
 | `assign.py` | 259 | `test_assign.py` (16) | verified |
 | `portable/lilr_cn.py` | — | `test_portable.py` (35) | verified |
-| **`callability.py`** | **205** | **none** | **unverified** |
-| **`genotype.py`** | **459** | **none** | **unverified** |
-| **`sequences.py`** | **359** | **none** | **unverified** |
+| `callability.py` | 205 | `test_callability.py` (33) | **logic verified**, pipeline unscored |
+| `genotype.py` | 459 | `test_genotype_lambda.py` (11) | **λ₁ path verified**, orchestration unscored |
+| `sequences.py` | 359 | `test_sequences.py` (32) | **live surface verified**, unscored |
 
-**1,023 lines carrying the callable track, variant calling and allele naming have
-no test coverage**, while everything up to and including assignment has 250
-behind it. (`tests/` greps that appear to touch the three modules are incidental:
-a string inside a docstring assertion, and a module-name check in the
-panel-independence leak test.)
+**Updated.** §2.1–2.3 are now done: 76 tests cover the pure logic of all three
+modules, `gather_evidence()` is checked position by position against
+`samtools depth`, and λ₁'s unit conversion is pinned. 327 tests total.
+
+**What is still not established is §2.4** — no allele sequence has been scored
+against truth. Unit tests say the parts behave as specified; they say nothing
+about whether the specification produces correct alleles. The distinction is the
+whole point of this document, and the table above now reads "verified" in the
+narrow sense of "its logic is pinned", not in the sense that matters for a
+biological claim.
+
+Testing found one real bug, recorded here because its shape is the argument for
+the whole exercise: `call_position()` tested `mapq_fraction` before depth, and at
+zero depth that fraction is 0/0, reported as 0.0. So an uncovered position was
+labelled `LOW_MAPQ` rather than `LOW_DEPTH` — and a gene at copy number 0, a
+LILRA3 deletion homozygote, reported its entire length as a mapping problem. The
+two statuses exist precisely because they prescribe different actions. Fixed, and
+pinned by a test.
 
 The code is real, not stubbed — `genotype.py` genuinely invokes `HaplotypeCaller`
 with `-ploidy` and `-L callable.bed`, `AddOrReplaceReadGroups`,
@@ -69,19 +82,19 @@ table. Any of those produces a plausible-looking depth and a wrong callable trac
 In this order. Each step is cheap relative to the cost of discovering the problem
 later.
 
-**2.1 Unit-test the three modules, pure logic first.** Following the repo's
+**2.1 Unit-test the three modules, pure logic first. — DONE.** Following the repo's
 existing separation, `classify()` and `mask_sequence()` in `callability.py` and
 the naming logic in `sequences.py` are functions of numbers and strings and can be
 tested without a BAM, exactly as `depth_model` and `arbitrate` are. Do this before
 touching anything with a cluster in it.
 
-**2.2 Test `gather_evidence()` against an independent depth measurement.** Build a
+**2.2 Test `gather_evidence()` against an independent depth measurement. — DONE.** Build a
 small fixture BAM with known per-position depth and assert agreement with
 `samtools depth -a` position by position, including at deletions, refskips and
 secondary alignments. This is the single most valuable test in the set, because it
 is the junction between verified arithmetic and unverified I/O.
 
-**2.3 Pin λ₁'s unit conversion with a test.** λ₁ is measured on the CRAM slice and
+**2.3 Pin λ₁'s unit conversion with a test. — DONE.** λ₁ is measured on the CRAM slice and
 applied to a realigned per-gene BAM, after extraction, recruitment, arbitration
 and realignment have each dropped reads; `recruitment_efficiency()` converts
 between the two (0.813 on HG00096).
@@ -105,7 +118,8 @@ same arithmetic, and CLAUDE.md warns in the other direction ("callers should use
 `lambda_at()` rather than `.lambda1` directly"). A test should assert the two
 agree, so the copies cannot drift.
 
-**2.4 Then score allele sequence on the 101-donor overlap.**
+**2.4 Then score allele sequence on the 101-donor overlap. — NOT DONE. This is
+the one that licenses a claim.**
 `validation/build_truth.py` already derives allele sequences from the panels;
 `validation/compare_cn.py` is the scoring template. Two requirements carried over
 from the copy-number work:

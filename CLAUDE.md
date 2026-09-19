@@ -108,21 +108,28 @@ downstream consumes, you have reintroduced it.
 
 ## Where the tests stop
 
-Everything up to and including assignment is covered — `loci`, `loci_chm13`,
-`coverage`, `depth_model`, `cn`, `realign`, `assign` and the portable duplicate,
-250 tests. **`callability.py`, `genotype.py` and `sequences.py` have none**, which
-is 1,023 lines carrying the callable track, variant calling and allele naming.
+327 tests. `callability`, `genotype` and `sequences` now have their logic pinned
+— `gather_evidence()` against `samtools depth` position by position, λ₁'s
+efficiency conversion, IUPAC translation and both strands of CDS extraction.
 
-The 101-donor validation scored **copy number**. There is no evidence yet for any
-claim about variant calls or allele assignments, and `PLAN.md`'s Phase 6 `[x]`
-means the code was written, not that it was checked. Do not cite a sequence result
-until `docs/variant_calling.md` §2 has been worked through; do not add a fixed
-depth constant downstream of `depth_model` (§3 explains why `DP >= 6` is looser
-than what is already enforced, not stricter).
+**That is not the same as being right.** Unit tests say the parts behave as
+specified; nothing has scored an allele sequence against truth. The 101-donor
+figures are **copy number**, and `PLAN.md`'s Phase 6 `[x]` means written, not
+checked. Do not cite a sequence result until `docs/variant_calling.md` §2.4 is
+done — it is the only step that licenses a claim, and it is the one still open.
 
-The sharpest untested edge is `callability.gather_evidence()`: it is the junction
-between arithmetic that is verified and I/O that is not, and its failure modes all
-produce plausible depth with a wrong callable track.
+Do not add a fixed depth constant downstream of `depth_model`: §3 shows `DP >= 6`
+is *looser* than what is already enforced (the floor is 21 at CN 2, λ₁ = 18), and
+§3.4 explains why a second masking threshold beside the callable track is the
+predecessor's failure mode. `sequences.build_consensus` still carries
+`MIN_CONS_DEPTH`; it is dead code, and `tests/test_sequences.py` asserts the
+genotyping path never reaches it.
+
+Testing that code found one real bug, and its shape is the argument for the
+exercise: `call_position()` checked `mapq_fraction` before depth, and at zero
+depth that is 0/0 → 0.0, so an uncovered position came back `LOW_MAPQ` rather
+than `LOW_DEPTH`. A gene at copy number 0 reported its whole length as a mapping
+problem. The statuses exist because they prescribe different actions.
 
 ## The depth model is the point
 
