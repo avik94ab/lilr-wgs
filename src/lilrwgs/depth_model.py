@@ -275,7 +275,16 @@ def call_position(depth: float, copies: int, lambda1: float,
     if lambda1 <= 0:
         return PositionCall(depth, 0.0, Callability.NO_MODEL, 0.0, 0, 0)
 
-    if mapq_fraction < min_mapq_fraction:
+    # `depth > 0` guards the MAPQ test, and it is not a formality. At zero depth
+    # `mapq_fraction` is 0/0, which PositionEvidence reports as 0.0 — so without
+    # this an uncovered position fails the MAPQ test and is labelled LOW_MAPQ
+    # despite there being no reads to have a mapping quality. The whole point of
+    # separating these statuses is that they prescribe different actions: a gene
+    # that is N for low depth needs more coverage, one that is N for low MAPQ
+    # never will. A gene at copy number 0 — a LILRA3 deletion homozygote, a
+    # LILRA6 null — has no reads anywhere in it, and used to report its entire
+    # length as LOW_MAPQ, which is the most misleading answer available.
+    if depth > 0 and mapq_fraction < min_mapq_fraction:
         return PositionCall(depth, 0.0, Callability.LOW_MAPQ, 0.0, 0, 0)
 
     eff = effective_copies(copies, shared_fraction, paralog_copies)
