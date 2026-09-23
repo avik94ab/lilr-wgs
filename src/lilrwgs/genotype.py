@@ -321,10 +321,11 @@ def process(
         hap_fa = work / f"hap{hap}.fa"
         run(["bcftools", "consensus", "-f", str(ref_fa), "-H", str(hap),
              "-o", str(hap_fa), str(consensus_vcf)])
-        gdna = callability.mask_sequence(_read_fasta(hap_fa), calls)
+        unmasked = _read_fasta(hap_fa)
+        gdna = callability.mask_sequence(unmasked, calls)
         result.haplotypes.append(
             _finish_haplotype(sample, locus, hap, gdna, work, out_sample,
-                              Path(protein_dir), miniprot))
+                              Path(protein_dir), miniprot, annotate_on=unmasked))
 
     shutil.rmtree(work, ignore_errors=True)
     return result
@@ -353,10 +354,26 @@ def _phasing_counts(vcf: Path) -> tuple[int, int]:
 
 def _finish_haplotype(sample: str, locus: str, hap: int, gdna: str,
                       work: Path, out_sample: Path, protein_dir: Path,
-                      miniprot: str) -> dict:
-    """miniprot for CDS coordinates, then slice and translate."""
-    hap_fa = work / f"hap{hap}_masked.fa"
-    hap_fa.write_text(f">{sample}_{locus}_hap{hap}\n{gdna}\n")
+                      miniprot: str, annotate_on: str | None = None) -> dict:
+    """miniprot for CDS coordinates, then slice and translate.
+
+    Coordinates come from ``annotate_on`` — the *unmasked* consensus — and are
+    applied to the masked ``gdna``. Masking is base-for-base, so the two share
+    coordinates. Annotating the masked sequence instead lets an N-run over a
+    splice site reshape the gene model: on HG00097, a masked intron boundary in
+    LILRA3 merged two exons and translated 147 bp of intron (488 aa against a
+    true 439), and a masked final exon in LILRB3 dropped 64 residues rather
+    than reporting them as X. Masked positions carry the reference base in the
+    unmasked consensus (variants there are filtered), so the splice sites
+    miniprot sees are the reference's unless a callable variant changed them.
+    """
+    if annotate_on is not None and len(annotate_on) != len(gdna):
+        raise ValueError(
+            f"{sample}/{locus}/hap{hap}: masked ({len(gdna)}) and unmasked "
+            f"({len(annotate_on)}) consensus differ in length")
+    hap_fa = work / f"hap{hap}_annotate.fa"
+    hap_fa.write_text(f">{sample}_{locus}_hap{hap}\n"
+                      f"{annotate_on if annotate_on is not None else gdna}\n")
 
     gdna_cds = cdna = protein = ""
     try:
