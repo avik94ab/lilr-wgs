@@ -217,8 +217,16 @@ stays plausible:
   `CoverageModel.usable_mapq20` gates this; the status becomes `not_measured`.
 
 Statuses are `measured` / `not_measured` / `failed`, and callability reasons are
-`low_depth` / `high_depth` / `low_mapq` / `paralog_ambiguous` / `no_model`. Do not
-collapse them into a boolean or a bare `N`.
+`low_depth` / `high_depth` / `low_mapq` / `paralog_ambiguous` / `deletion_shared` /
+`no_model`. Do not collapse them into a boolean or a bare `N`.
+
+**LILRA3's last 2,309 bp survives its own deletion** (`loci.RETAINED_ON_LOCUS_REF`),
+so it is at two copies whatever LILRA3's copy number. `genotype.copies_by_position`
+judges and calls it at the copies present, and an SNV heterozygote there at CN 1
+is a difference between the two chromosomes, masked as `deletion_shared` -- not a
+LILRA3 allele. Called haploid, that stretch put the GRCh38-primary base into hap1
+at primary-vs-LILRA3 sites in 6 of 12 one-copy EUR50 samples without a flag.
+`copies_by_position` refuses a calling reference the span was not measured on.
 
 ## Paralogue handling
 

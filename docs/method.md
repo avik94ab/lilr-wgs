@@ -133,8 +133,11 @@ Deriving both from one track makes that gap unrepresentable.
 
 Every position's verdict is written to a track with the numbers behind it, and
 the reasons are distinct: `low_depth`, `high_depth`, `low_mapq`,
-`paralog_ambiguous`, `no_model`. A gene that is 40% N from low depth needs more
-coverage; one that is 40% N from paralogue ambiguity never will be.
+`paralog_ambiguous`, `deletion_shared`, `no_model`. A gene that is 40% N from low
+depth needs more coverage; one that is 40% N from paralogue ambiguity never will
+be. `deletion_shared` is an SNV heterozygote in the part of LILRA3 its deletion
+allele also carries: at one copy it is a difference between the two chromosomes, and
+which base is LILRA3's is unknown.
 
 Measured on HG00096 at λ₁_eff = 15.5:
 

@@ -111,6 +111,12 @@ class Callability(str, Enum):
     HIGH_DEPTH = "high_depth"
     LOW_MAPQ = "low_mapq"
     PARALOG_AMBIGUOUS = "paralog_ambiguous"
+    # An SNV heterozygote in sequence the gene shares with its own deletion allele.
+    # LILRA3's 3' end survives the deletion, so in a one-copy sample it is read
+    # from both chromosomes; where they differ, short reads cannot say which base
+    # sits on the LILRA3-bearing one. Not a paralogue, and more reads will not
+    # help -- the reason is different from both of its neighbours.
+    DELETION_SHARED = "deletion_shared"
     NO_MODEL = "no_model"
 
 

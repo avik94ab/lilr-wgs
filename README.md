@@ -287,7 +287,7 @@ What happens to a position that fails:
 |---|---|
 | it is excluded from `callable.bed` | so `HaplotypeCaller -L` never considers it, and the consensus and the variant call agree by construction rather than by two thresholds that can disagree |
 | the consensus base is masked to `N` | via `mask_sequence()` |
-| **the reason is recorded** | `low_depth`, `high_depth`, `low_mapq`, `paralog_ambiguous`, `no_model` |
+| **the reason is recorded** | `low_depth`, `high_depth`, `low_mapq`, `paralog_ambiguous`, `deletion_shared`, `no_model` |
 
 That last row is the point. The predecessor masked to a bare `N`, so an `N` in its
 output could equally mean "no reads", "reads but ambiguous", or a real deletion.

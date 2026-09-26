@@ -39,13 +39,14 @@ import logging
 import os
 import shutil
 import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from . import callability
 from .assign import DEFAULT_SHARED_GROUPS, read_shared_names
-from .depth_model import HET_RATIO, MIN_DP_FINAL, MIN_DP_SETUP
-from .sequences import extract_sequences
+from .depth_model import Callability, HET_RATIO, MIN_DP_FINAL, MIN_DP_SETUP
+from .loci import RETAINED_ANCHOR, RETAINED_ON_LOCUS_REF
+from .sequences import extract_sequences, stop_codon_status
 from .shell import ToolError, require, run
 
 log = logging.getLogger(__name__)
@@ -74,6 +75,80 @@ def paralog_of(gene: str, groups=DEFAULT_SHARED_GROUPS) -> str | None:
         if gene in members and len(members) == 2:
             return members[0] if members[1] == gene else members[1]
     return None
+
+
+def copies_by_position(locus: str, copies: int, ref_seq: str,
+                       retained=RETAINED_ON_LOCUS_REF,
+                       anchors=RETAINED_ANCHOR) -> list[int] | None:
+    """Copies actually present at each position, where that is not ``copies``.
+
+    A stretch that survives the gene's own deletion is carried by every
+    chromosome whichever allele it has, so it sits at two copies at gene copy
+    number 0, 1 or 2 -- ``max(copies, 2)``. Judging it at the gene's copy number
+    reads it as a pile-up in every heterozygous-deletion sample.
+
+    Returns None when nothing differs, so a gene or sample this does not apply
+    to takes exactly the path it always took. Raises if the reference is not the
+    one the span was measured on: the coordinates would still resolve, and the
+    wrong stretch would be called at the wrong ploidy without complaint.
+    """
+    span = retained.get(locus)
+    if span is None:
+        return None
+    start, end = span
+    anchor = anchors.get(locus, "")
+    half = len(anchor) // 2
+    if end > len(ref_seq) or ref_seq[start - half:start + half].upper() != anchor:
+        raise ValueError(
+            f"{locus}: the calling reference ({len(ref_seq)} bp) is not the one "
+            f"RETAINED_ON_LOCUS_REF was measured on -- no {anchor!r} at "
+            f"{start - half}; re-measure the span rather than apply it")
+    if copies >= 2:
+        return None
+    out = [copies] * len(ref_seq)
+    for i in range(start, end):
+        out[i] = max(copies, 2)
+    return out
+
+
+def unassignable_hets(vcf_body: str, copies: int,
+                      copies_by_pos: list[int]) -> set[int]:
+    """0-based positions of heterozygotes where more copies are present than
+    the gene has.
+
+    At LILRA3 copy number 1 the retained stretch is called at ploidy 2, because
+    it is read from both chromosomes. A homozygote there says both carry the
+    base, so the LILRA3 chromosome does too. A heterozygote says they differ, and
+    nothing in a short read says which base is on the LILRA3-bearing one -- so
+    the position is unknown, not whichever allele had more reads. A haploid call
+    over the same reads made exactly that majority vote, and put the GRCh38
+    primary base into hap1 at a primary-vs-LILRA3 site in 6 of 12 one-copy EUR50
+    samples.
+
+    Two limits. The first ~300 bp after the junction is read mostly from the
+    LILRA3 chromosome (see loci.RETAINED_ON_LOCUS_REF), so a homozygote there is
+    weaker evidence that both chromosomes agree. And only SNVs reach this: the
+    VCF has had indels removed, as it has for every gene, because indels never
+    reach the consensus.
+
+    ``vcf_body`` is ``bcftools view -H`` output: records only.
+    """
+    out: set[int] = set()
+    for line in vcf_body.splitlines():
+        if not line or line.startswith("#"):
+            continue
+        fields = line.split("\t")
+        if len(fields) < 10:
+            continue
+        alleles = {a for a in fields[9].split(":")[0].replace("|", "/").split("/")
+                   if a != "."}
+        if len(alleles) < 2:
+            continue
+        pos0 = int(fields[1]) - 1
+        for i in range(pos0, pos0 + len(fields[3])):
+            if 0 <= i < len(copies_by_pos) and copies_by_pos[i] > copies:
+                out.add(i)
+    return out
 
 
 @dataclass
@@ -187,6 +262,10 @@ def process(
     ref_fa = Path(locus_ref_dir) / f"{locus}_named.fa"
     _ensure_ref_index(ref_fa, gatk)
     ref_seq = _read_fasta(ref_fa)
+    # Copies present per position, where a stretch survives the gene's deletion.
+    # None for every gene and sample it does not apply to. Checked before
+    # aligning, since a reference it does not describe is refused.
+    copies_by_pos = copies_by_position(locus, copies, ref_seq)
 
     # 1. Align to the single per-locus reference.
     bam = work / "aligned.bam"
@@ -228,15 +307,15 @@ def process(
             evidence, copies=copies, lambda1=lambda1, dispersion=dispersion,
             paralog_copies=paralog_copies, alpha=alpha,
             min_mapq_fraction=min_mapq_fraction,
-            gc_by_pos=gc_by_pos, gc_lookup=gc_lookup, min_dp=min_dp)
+            gc_by_pos=gc_by_pos, gc_lookup=gc_lookup, min_dp=min_dp,
+            copies_by_pos=copies_by_pos)
 
     calls_setup = _classify(min_dp_setup)
     calls = _classify(min_dp)          # final: the track, the mask, the filter
 
     contig = _contig_name(ref_fa)
-    result.callability = callability.write_track(
-        out_sample / f"{locus}.callability.tsv.gz".replace(".gz", ""),
-        contig, evidence, calls)
+    track = out_sample / f"{locus}.callability.tsv.gz".replace(".gz", "")
+    result.callability = callability.write_track(track, contig, evidence, calls)
     result.callable_fraction = result.callability["callable_fraction"]
 
     # What HaplotypeCaller may consider: the permissive set.
@@ -250,14 +329,35 @@ def process(
         shutil.rmtree(work, ignore_errors=True)
         return result
 
-    # 3. Call at ploidy = copy number, restricted to callable positions. Passing
-    # -L here rather than filtering afterwards also saves HaplotypeCaller the
-    # work of assembling regions that could never survive the filter.
+    # 3. Call at ploidy = copies present, restricted to callable positions.
+    # Passing -L here rather than filtering afterwards also saves HaplotypeCaller
+    # the work of assembling regions that could never survive the filter. That is
+    # the gene's copy number everywhere except a stretch that survives the gene's
+    # deletion, which gets its own run at its own ploidy: called haploid, a 1:1
+    # mix of two chromosomes is decided by majority and the allele-balance filter
+    # below, which only looks at heterozygotes, never sees it.
+    ploidy_at = copies_by_pos or [copies] * len(ref_seq)
     raw_vcf = work / "raw.vcf.gz"
     try:
-        run([gatk, *GATK_JAVA_OPTS, "HaplotypeCaller",
-             "-R", str(ref_fa), "-I", str(rg_bam), "-O", str(raw_vcf),
-             "-ploidy", str(copies), "-L", str(bed), "--tmp-dir", str(work)])
+        parts = []
+        for ploidy in sorted(set(ploidy_at)):
+            part_bed = bed
+            if copies_by_pos is not None:
+                part_bed = work / f"callable.ploidy{ploidy}.bed"
+                if callability.callable_bed(
+                        part_bed, contig, calls_setup,
+                        where=[p == ploidy for p in ploidy_at]) == 0:
+                    continue
+            part_vcf = raw_vcf if copies_by_pos is None else \
+                work / f"raw.ploidy{ploidy}.vcf.gz"
+            run([gatk, *GATK_JAVA_OPTS, "HaplotypeCaller",
+                 "-R", str(ref_fa), "-I", str(rg_bam), "-O", str(part_vcf),
+                 "-ploidy", str(ploidy), "-L", str(part_bed),
+                 "--tmp-dir", str(work)])
+            parts.append(part_vcf)
+        if copies_by_pos is not None:
+            run(["bcftools", "concat", "-a", "-Oz", "-o", str(raw_vcf),
+                 *map(str, parts)])
     except ToolError as exc:
         # The callability track is already written and is the expensive part of
         # this function. Losing it because the caller failed would also lose the
@@ -283,10 +383,31 @@ def process(
     # would discard every one of them.
     ab = (f'(GT="het" & (FMT/AD[0:1])/(FMT/DP) >= {het_ratio}) '
           f'| GT!="het"')
-    run(["bcftools", "view", "-V", "indels", "-T", str(final_bed),
-         "-i", ab,
-         "-Oz", "-o", str(filt_vcf), str(raw_vcf)])
-    run(["bcftools", "index", "-f", str(filt_vcf)])
+
+    def _filter():
+        run(["bcftools", "view", "-V", "indels", "-T", str(final_bed),
+             "-i", ab,
+             "-Oz", "-o", str(filt_vcf), str(raw_vcf)])
+        run(["bcftools", "index", "-f", str(filt_vcf)])
+
+    _filter()
+
+    # A heterozygote in the stretch the deletion allele also carries is a
+    # difference between the two chromosomes, not between two LILRA3 alleles, and
+    # which base is LILRA3's is unknown. It becomes a masked position with its
+    # own reason, and the track, the BED and the VCF are all rebuilt from the
+    # updated calls so the mask and the filter still come from one place.
+    if copies_by_pos is not None:
+        body = run(["bcftools", "view", "-H", str(filt_vcf)]).stdout
+        shared = unassignable_hets(body, copies, copies_by_pos)
+        if shared:
+            calls = [replace(c, status=Callability.DELETION_SHARED)
+                     if i in shared else c for i, c in enumerate(calls)]
+            result.callability = callability.write_track(track, contig,
+                                                         evidence, calls)
+            result.callable_fraction = result.callability["callable_fraction"]
+            callability.callable_bed(final_bed, contig, calls)
+            _filter()
 
     # 4. Phase. `whatshap phase` is diploid-only; above CN 2 it silently produces
     # an unphased VCF that bcftools consensus then splits arbitrarily, so
@@ -375,7 +496,7 @@ def _finish_haplotype(sample: str, locus: str, hap: int, gdna: str,
     hap_fa.write_text(f">{sample}_{locus}_hap{hap}\n"
                       f"{annotate_on if annotate_on is not None else gdna}\n")
 
-    gdna_cds = cdna = protein = ""
+    gdna_cds = cdna = protein = stop = ""
     try:
         res = subprocess.run([miniprot, "--gff", str(hap_fa),
                               str(protein_dir / f"{locus}_protein.faa")],
@@ -383,6 +504,7 @@ def _finish_haplotype(sample: str, locus: str, hap: int, gdna: str,
         coords = _parse_gff(res.stdout)
         if coords:
             gdna_cds, cdna, protein = extract_sequences(gdna, coords)
+            stop = stop_codon_status(cdna, coords)
     except Exception as exc:                            # noqa: BLE001
         log.warning("%s/%s/hap%s: miniprot failed (%s)", sample, locus, hap, exc)
 
@@ -398,12 +520,19 @@ def _finish_haplotype(sample: str, locus: str, hap: int, gdna: str,
         "cdna_len": len(cdna), "protein_len": len(protein),
         "gdna_n_pct": round(100 * gdna.count("N") / max(len(gdna), 1), 2),
         "protein_x_pct": round(100 * protein.count("X") / max(len(protein), 1), 2),
+        "stop_codon": stop,
     }
 
 
 def _parse_gff(text: str) -> dict | None:
-    """mRNA span, strand and CDS exons from miniprot GFF, 0-based half-open."""
-    mrna, strand, cds = None, "+", []
+    """mRNA span, strand, CDS exons and stop codon from miniprot GFF, 0-based
+    half-open.
+
+    The stop is kept because miniprot includes it in the last CDS feature, so
+    without it a masked stop is indistinguishable from a final coding codon and
+    translates to a trailing X.
+    """
+    mrna, strand, cds, stop = None, "+", [], None
     for line in text.splitlines():
         if line.startswith("#"):
             continue
@@ -415,11 +544,13 @@ def _parse_gff(text: str) -> dict | None:
             mrna, strand = (start, end), parts[6]
         elif parts[2] == "CDS":
             cds.append((start, end))
+        elif parts[2] == "stop_codon":
+            stop = (start, end)
     if mrna is None:
         return None
     cds.sort()
     return {"mrna_start": mrna[0], "mrna_end": mrna[1],
-            "strand": strand, "exons": cds}
+            "strand": strand, "exons": cds, "stop_codon": stop}
 
 
 def main(argv: list[str] | None = None) -> int:

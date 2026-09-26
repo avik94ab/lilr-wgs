@@ -80,6 +80,63 @@ class TestTranslate:
         assert _translate("") == ""
 
 
+class TestAMaskedStopIsNotAResidue:
+    """miniprot includes the stop codon in the last CDS feature. Translated
+    through, a masked stop becomes a trailing X: 7 of 12 one-copy EUR50 samples
+    reported a 440-aa LILRA3 whose reference is 439, from nothing but masking."""
+
+    # ATG AAA GGG | TTT CCC TAA  on the plus strand; stop at [15, 18)
+    PLUS = {"mrna_start": 0, "mrna_end": 18, "strand": "+",
+            "exons": [(0, 9), (9, 18)], "stop_codon": (15, 18)}
+
+    def test_masked_stop_gives_no_trailing_x(self):
+        cons = "ATGAAAGGG" "TTTCCCNNN"
+        _, cdna, protein = extract_sequences(cons, self.PLUS)
+        assert protein == "MKGFP"
+        assert cdna.endswith("NNN")                 # the cDNA keeps the N
+        assert sequences.stop_codon_status(cdna, self.PLUS) == "masked"
+
+    def test_a_partly_masked_stop_is_still_masked(self):
+        cons = "ATGAAAGGG" "TTTCCCTNA"
+        _, cdna, protein = extract_sequences(cons, self.PLUS)
+        assert protein == "MKGFP"
+        assert sequences.stop_codon_status(cdna, self.PLUS) == "masked"
+
+    def test_a_read_stop_is_present_and_the_protein_is_unchanged(self):
+        cons = "ATGAAAGGG" "TTTCCCTAA"
+        _, cdna, protein = extract_sequences(cons, self.PLUS)
+        assert protein == "MKGFP"
+        assert sequences.stop_codon_status(cdna, self.PLUS) == "present"
+
+    def test_minus_strand_stop_sits_at_the_low_end(self):
+        plus_cdna = "ATGAAAGGGTTTCCCNNN"
+        coords = {"mrna_start": 0, "mrna_end": 18, "strand": "-",
+                  "exons": [(0, 9), (9, 18)], "stop_codon": (0, 3)}
+        _, cdna, protein = extract_sequences(_revcomp(plus_cdna), coords)
+        assert protein == "MKGFP"
+        assert sequences.stop_codon_status(cdna, coords) == "masked"
+
+    def test_masked_codons_before_the_stop_are_still_x(self):
+        cons = "ATGAAAGGG" "NNNCCCNNN"
+        _, _, protein = extract_sequences(cons, self.PLUS)
+        assert protein == "MKGXP"
+
+    def test_without_an_annotated_stop_nothing_changes(self):
+        coords = {k: v for k, v in self.PLUS.items() if k != "stop_codon"}
+        cons = "ATGAAAGGG" "TTTCCCNNN"
+        _, cdna, protein = extract_sequences(cons, coords)
+        assert protein == "MKGFPX"
+        assert sequences.stop_codon_status(cdna, coords) == "unannotated"
+
+    def test_a_clean_codon_that_does_not_stop_is_kept(self):
+        """Not reachable from genotyping, which annotates the same bases it
+        translates, but the model must not silently eat a real residue."""
+        cons = "ATGAAAGGG" "TTTCCCTTA"
+        _, cdna, protein = extract_sequences(cons, self.PLUS)
+        assert protein == "MKGFPL"
+        assert sequences.stop_codon_status(cdna, self.PLUS) == "not_stop"
+
+
 class TestExtractSequences:
     """`coords` uses 0-based half-open exons sorted low->high, and `strand`
     decides both the order they are joined in and whether each is complemented."""

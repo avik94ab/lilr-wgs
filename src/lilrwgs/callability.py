@@ -88,10 +88,15 @@ def classify(evidence: list[PositionEvidence], *, copies: int, lambda1: float,
              dispersion: float, paralog_copies: int = 0,
              alpha: float = 0.005, min_mapq_fraction: float = 0.5,
              gc_by_pos: list[float] | None = None,
-             gc_lookup=None, min_dp: int | None = None) -> list[PositionCall]:
+             gc_lookup=None, min_dp: int | None = None,
+             copies_by_pos: list[int] | None = None) -> list[PositionCall]:
     """Run the depth model over a gene's positions.
 
     Args:
+        copies_by_pos: optional per-position copy number, overriding ``copies``
+            where a stretch of the gene is present on more chromosomes than the
+            gene is -- LILRA3's 3' end, which survives its own deletion. From
+            :func:`lilrwgs.genotype.copies_by_position`.
         paralog_copies: copy number of the gene this one shares a block with, or
             0 if it is separable. Positions whose reads are mostly shared
             legitimately carry both genes' coverage, and without this the
@@ -107,8 +112,9 @@ def classify(evidence: list[PositionEvidence], *, copies: int, lambda1: float,
         lam = lambda1
         if gc_lookup is not None and gc_by_pos is not None and i < len(gc_by_pos):
             lam = gc_lookup(gc_by_pos[i])
+        k = copies_by_pos[i] if copies_by_pos is not None else copies
         calls.append(call_position(
-            e.depth, copies=copies, lambda1=lam, dispersion=dispersion,
+            e.depth, copies=k, lambda1=lam, dispersion=dispersion,
             alpha=alpha, min_dp=min_dp, shared_fraction=e.shared_fraction,
             paralog_copies=paralog_copies, mapq_fraction=e.mapq_fraction,
             min_mapq_fraction=min_mapq_fraction,
@@ -139,7 +145,8 @@ def write_track(path: str | os.PathLike, contig: str,
 
 
 def callable_bed(path: str | os.PathLike, contig: str,
-                 calls: list[PositionCall]) -> int:
+                 calls: list[PositionCall],
+                 where: list[bool] | None = None) -> int:
     """Write callable positions as a BED of merged runs.
 
     This is what constrains variant calling. Where the predecessor passed
@@ -148,13 +155,17 @@ def callable_bed(path: str | os.PathLike, contig: str,
     number, local GC and whether the block is shared. Feeding it to
     ``bcftools view -T`` applies the whole model without any of it having to be
     expressed as a filter expression.
+
+    Args:
+        where: optional per-position mask restricting the BED further, so a gene
+            called at two ploidies can be given one interval file per ploidy.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     runs: list[tuple[int, int]] = []
     start = None
     for i, c in enumerate(calls):
-        if c.status is Callability.OK:
+        if c.status is Callability.OK and (where is None or where[i]):
             if start is None:
                 start = i
         elif start is not None:

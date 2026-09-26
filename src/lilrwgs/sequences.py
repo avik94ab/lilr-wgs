@@ -184,8 +184,50 @@ def extract_sequences(consensus: str, coords: dict) -> tuple:
         # Minus strand: exons in reverse coordinate order, each rev-complemented
         cdna = ''.join(_revcomp(consensus[s:e]) for s, e in reversed(exons))
 
-    protein = _translate(cdna)
+    # Where the gene model annotates a stop inside the CDS, only the codons
+    # before it are coding. Translating through it turns a *masked* stop into a
+    # trailing X -- a residue 440 on a 439-aa LILRA3 in 7 of 12 one-copy EUR50
+    # samples, which no allele has. Whether the stop was read is reported
+    # separately, by stop_codon_status.
+    if stop_codon_status(cdna, coords) in ('present', 'masked'):
+        protein = _translate(cdna[:-3])
+    else:
+        protein = _translate(cdna)
     return gdna_cds, cdna, protein
+
+
+def _stop_is_terminal(coords: dict) -> bool:
+    """True if ``coords['stop_codon']`` is the last codon of the joined CDS."""
+    stop = coords.get('stop_codon')
+    exons = coords.get('exons') or []
+    if not stop or not exons:
+        return False
+    s, e = stop
+    if e - s != 3:
+        return False
+    if coords.get('strand', '+') == '+':
+        return exons[-1][0] <= s and e == exons[-1][1]
+    return s == exons[0][0] and e <= exons[0][1]
+
+
+def stop_codon_status(cdna: str, coords: dict) -> str:
+    """Whether the annotated stop codon was read.
+
+    ``present`` -- a stop, however it is spelled; ``masked`` -- the codon carries
+    an N or an ambiguity that is not a stop either way, so the protein's end is
+    inferred from the gene model rather than observed; ``not_stop`` -- a clean
+    codon that does not stop, so the model does not describe this sequence;
+    ``unannotated`` -- the gene model has no terminal stop, and the protein ends
+    wherever translation did.
+    """
+    if not _stop_is_terminal(coords) or len(cdna) < 3:
+        return 'unannotated'
+    codon = cdna[-3:].upper()
+    if _translate(codon) == '':
+        return 'present'
+    if all(b in 'ACGT' for b in codon):
+        return 'not_stop'
+    return 'masked'
 
 
 def _translate(cdna: str) -> str:

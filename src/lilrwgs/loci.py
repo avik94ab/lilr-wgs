@@ -141,10 +141,42 @@ LILRA3_SPAN = 6_758
 LILRA3_JUNCTION = (CHROM, 54_297_005)
 LILRA3_JUNCTION_MICROHOMOLOGY = 5
 
-# ~980 bp of LILRA3's 3' end survives the deletion and sits on primary just left
-# of the junction, at two copies in everyone. A QC probe, not a target: if it
-# does not read flat near 1.0, the region is not being sampled as assumed.
-LILRA3_RETAINED = [(CHROM, 54_296_025, 54_297_005)]
+# LILRA3's 3' end survives the deletion and sits on primary just left of the
+# junction, at two copies in everyone whichever allele each chromosome carries.
+#
+# Measured, not inferred from the deletion's length. This used to end at
+# 54,296,025 (~980 bp, the RefSeq 3' end); the sequence carries on. Aligning the
+# calling reference to primary puts LILRA3_named.fa 4818..7126 on
+# chr19:54,297,005..54,294,695 (minus strand, 99.5% identity, two 1 bp indels),
+# with the first retained base exactly at LILRA3_JUNCTION. Only 4,817 bp of the
+# 6,758 bp deletion falls inside the 7,126 bp reference -- the rest is upstream
+# of its 5' end -- so 2,309 bp of it survives, not the 368 the subtraction
+# suggests. It holds the end of intron 6, all of exon 7 including the stop
+# codon, the 3' UTR and ~1.3 kb of flank. The deletion homozygote NA12282 reads
+# 0 over 1..4817 and 1.997 copies over 5250..6700 (EUR50, 2026-09).
+LILRA3_RETAINED = [(CHROM, 54_294_694, 54_297_005)]
+
+# The same sequence in the coordinates genotyping works in: 0-based half-open
+# on each per-locus calling reference. The expected copy number here is not the
+# gene's -- see genotype.copies_by_position. Judged at one copy in a
+# heterozygous-deletion sample it read ~2x expected: 98.5% of LILRA3's high_depth
+# calls at CN 1 in EUR50 fell in it, and where it slipped under the ceiling a
+# haploid call took a majority vote between the two chromosomes -- the GRCh38
+# primary base went into hap1 at a primary-vs-LILRA3 site in 6 of 12 samples.
+#
+# Not flat at two copies from its first base. Deletion-chromosome reads that
+# cross the junction cannot align end to end to this reference, so at CN 1 the
+# first ~300 bp reads nearer one copy (median depth/expected at two copies
+# 0.22-0.73 over 4818-4917, 0.25-0.62 over 4918-5017) and ~2 only from ~5118 to
+# ~6717, falling off again at the reference's 3' end, as it does at CN 2. Calls
+# in that first stretch mostly reflect the LILRA3 chromosome.
+RETAINED_ON_LOCUS_REF = {"LILRA3": (4_817, 7_126)}
+
+# 20 bp either side of each span's start, on the reference the span was measured
+# on. The coordinates describe one file; applied to a rebuilt or differently
+# flanked reference they would call the wrong stretch at the wrong ploidy and the
+# output would still look plausible, so genotyping refuses instead.
+RETAINED_ANCHOR = {"LILRA3": "CAACAAAGGTTTACAAAGCCCCACTGTTTTAGAATCTGCT"}
 
 # ---------------------------------------------------------------------------
 # Paralogue-unique windows

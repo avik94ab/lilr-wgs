@@ -244,7 +244,7 @@ expectation is too low, and the ceiling rejects real shared-block positions as
 pile-ups. Test that before trusting a callable fraction at LILRA6 or LILRB3.
 
 **Statuses stay distinct.** `ok` / `low_depth` / `high_depth` / `low_mapq` /
-`paralog_ambiguous` / `no_model`, and `measured` / `not_measured` / `failed`. Never
+`paralog_ambiguous` / `deletion_shared` / `no_model`, and `measured` / `not_measured` / `failed`. Never
 a boolean or a bare `N`: at LILRA3 zero is a common true state, so a failed query
 reported as zero manufactures deletions, and a non-ALT-aware GRCh38 alignment
 reads near zero at every MAPQ-20 window for everyone alike, which looks exactly

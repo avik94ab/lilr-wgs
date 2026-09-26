@@ -20,9 +20,9 @@ from pathlib import Path
 COLUMNS = [
     "sample", "locus", "cn", "status", "callable_fraction",
     "n_low_depth", "n_high_depth", "n_low_mapq", "n_paralog_ambiguous",
-    "phased_ok", "n_het", "n_phased", "phasing_rate",
+    "n_deletion_shared", "phased_ok", "n_het", "n_phased", "phasing_rate",
     "haplotype", "gdna_len", "gdna_cds_len", "cdna_len", "protein_len",
-    "gdna_n_pct", "protein_x_pct", "error",
+    "gdna_n_pct", "protein_x_pct", "stop_codon", "error",
 ]
 
 
@@ -47,6 +47,7 @@ def main() -> int:
             "n_high_depth": r.get("cb_n_high_depth", ""),
             "n_low_mapq": r.get("cb_n_low_mapq", ""),
             "n_paralog_ambiguous": r.get("cb_n_paralog_ambiguous", ""),
+            "n_deletion_shared": r.get("cb_n_deletion_shared", ""),
             "phased_ok": r.get("phased_ok", ""),
             "n_het": r.get("n_het", ""), "n_phased": r.get("n_phased", ""),
             "phasing_rate": f"{rate:.3f}" if isinstance(rate, (int, float)) else "",
@@ -60,7 +61,8 @@ def main() -> int:
                              "cdna_len": h["cdna_len"],
                              "protein_len": h["protein_len"],
                              "gdna_n_pct": h["gdna_n_pct"],
-                             "protein_x_pct": h["protein_x_pct"], "error": ""})
+                             "protein_x_pct": h["protein_x_pct"],
+                             "stop_codon": h.get("stop_codon", ""), "error": ""})
         else:
             # A locus with no haplotypes still gets a row. `absent_cn0` at
             # LILRA3 is a result, not a gap, and dropping it would make a
