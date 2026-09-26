@@ -47,7 +47,7 @@ from .assign import DEFAULT_SHARED_GROUPS, read_shared_names
 from .depth_model import Callability, HET_RATIO, MIN_DP_FINAL, MIN_DP_SETUP
 from .loci import RETAINED_ANCHOR, RETAINED_ON_LOCUS_REF
 from .sequences import extract_sequences, stop_codon_status
-from .shell import ToolError, require, run
+from .shell import ToolError, pipeline, require, run
 
 log = logging.getLogger(__name__)
 
@@ -151,12 +151,56 @@ def unassignable_hets(vcf_body: str, copies: int,
     return out
 
 
+def allele_balance_ok(gt: str, ad: list[int | None], dp: int | None,
+                      het_ratio: float) -> bool:
+    """Whether a genotype's least-supported called allele carries enough reads.
+
+    PING's ``hetRatio``, applied to the alleles GT actually names: at a
+    heterozygote every called allele must hold at least ``het_ratio`` of ``DP``.
+    A homozygote, or a genotype with nothing called, has no minor allele and
+    passes. A heterozygote whose AD or DP is missing, or whose GT names an allele
+    AD has no entry for, fails: the balance cannot be shown, and an unshown het
+    is the thing this filter exists to stop.
+    """
+    alleles = {a for a in gt.replace("|", "/").split("/") if a != "."}
+    if len(alleles) < 2:
+        return True
+    if not dp or dp <= 0:
+        return False
+    for a in alleles:
+        i = int(a)
+        if i >= len(ad) or ad[i] is None or ad[i] / dp < het_ratio:
+            return False
+    return True
+
+
+def _record_balanced(line: str, het_ratio: float) -> bool:
+    """:func:`allele_balance_ok` on one single-sample VCF record line."""
+    fields = line.rstrip("\n").split("\t")
+    if len(fields) < 10:
+        return True
+    values = dict(zip(fields[8].split(":"), fields[9].split(":")))
+
+    def _int(v: str) -> int | None:
+        return None if v in ("", ".") else int(v)
+
+    ad_raw = values.get("AD", ".")
+    ad = [] if ad_raw == "." else [_int(v) for v in ad_raw.split(",")]
+    return allele_balance_ok(values.get("GT", "."), ad,
+                             _int(values.get("DP", ".")), het_ratio)
+
+
 @dataclass
 class GenotypeResult:
     sample: str
     locus: str
     copies: int
     status: str = "ok"
+    # Where ``copies`` came from (empty when the caller did not say): the
+    # copy-number call's own status, or ``not_called`` for a gene fixed at 2 by
+    # design. Anything but ``measured`` means ``copies`` is the fallback 2,
+    # which the number alone cannot show.
+    cn_status: str = ""
     phased_ok: bool = False
     phasing_rate: float | None = None
     n_het: int = 0
@@ -169,7 +213,7 @@ class GenotypeResult:
     def as_dict(self) -> dict:
         return {
             "sample": self.sample, "locus": self.locus, "cn": self.copies,
-            "status": self.status, "phased_ok": self.phased_ok,
+            "cn_status": self.cn_status, "status": self.status, "phased_ok": self.phased_ok,
             "phasing_rate": self.phasing_rate,
             "n_het": self.n_het, "n_phased": self.n_phased,
             "callable_fraction": self.callable_fraction,
@@ -269,13 +313,20 @@ def process(
 
     # 1. Align to the single per-locus reference.
     bam = work / "aligned.bam"
-    bt2 = subprocess.Popen(
-        ["bowtie2", "-x", str(Path(locus_index_dir) / locus),
-         "-1", str(r1), "-2", str(r2), "-p", str(threads), *BOWTIE2_ARGS, "-S", "-"],
-        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    subprocess.run(["samtools", "sort", "-@", str(threads), "-o", str(bam), "-"],
-                   stdin=bt2.stdout, capture_output=True)
-    bt2.wait()
+    # pipeline() checks bowtie2's exit code as well as sort's. Piped by hand, a
+    # bowtie2 killed partway leaves sort a clean EOF and a valid, partial BAM,
+    # and the gene reads as mostly low_depth with status ok.
+    try:
+        pipeline([
+            ["bowtie2", "-x", str(Path(locus_index_dir) / locus),
+             "-1", str(r1), "-2", str(r2), "-p", str(threads), *BOWTIE2_ARGS, "-S", "-"],
+            ["samtools", "sort", "-@", str(threads), "-T", str(work / "aligned.sort"),
+             "-o", str(bam), "-"],
+        ])
+    except ToolError as exc:
+        result.status = "error"
+        result.error = str(exc)
+        return result
     if not bam.exists() or bam.stat().st_size == 0:
         result.status = "no_alignment"
         return result
@@ -381,13 +432,20 @@ def process(
     # Applied only to sites that are actually called heterozygous -- a
     # homozygous-variant site has no minor allele to balance, and requiring one
     # would discard every one of them.
-    ab = (f'(GT="het" & (FMT/AD[0:1])/(FMT/DP) >= {het_ratio}) '
-          f'| GT!="het"')
-
+    #
+    # Decided in Python by allele_balance_ok(), not by a bcftools expression:
+    # `FMT/AD[0:1]` is the first ALT's count, which is the minor allele only
+    # when the reference is the major one. A 0/1 at AD=3,27 -- three reference
+    # reads, plausibly a paralogue's -- passed, and consensus wrote the
+    # reference base into a haplotype. bcftools cannot index AD by the alleles
+    # GT carries, so a 0/2 was judged on an allele it did not call.
     def _filter():
-        run(["bcftools", "view", "-V", "indels", "-T", str(final_bed),
-             "-i", ab,
-             "-Oz", "-o", str(filt_vcf), str(raw_vcf)])
+        text = run(["bcftools", "view", "-V", "indels", "-T", str(final_bed),
+                    str(raw_vcf)]).stdout
+        kept = [ln for ln in text.splitlines(keepends=True)
+                if ln.startswith("#") or _record_balanced(ln, het_ratio)]
+        run(["bcftools", "view", "-Oz", "-o", str(filt_vcf), "-"],
+            text_input="".join(kept))
         run(["bcftools", "index", "-f", str(filt_vcf)])
 
     _filter()
@@ -590,7 +648,8 @@ def main(argv: list[str] | None = None) -> int:
         from .coverage import gc_bin
         return lambda1 * gc.get(gc_bin(value), 1.0)
 
-    copies, paralog_copies = _copies_from(args.cn_tsv, args.sample, args.locus)
+    copies, paralog_copies, cn_status = _copies_from(args.cn_tsv, args.sample,
+                                                     args.locus)
 
     try:
         result = process(
@@ -605,21 +664,28 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:                            # noqa: BLE001
         result = GenotypeResult(sample=args.sample, locus=args.locus,
                                 copies=copies, status="error", error=str(exc))
+    result.cn_status = cn_status
 
     Path(args.marker).parent.mkdir(parents=True, exist_ok=True)
     Path(args.marker).write_text(json.dumps(result.as_dict(), indent=2))
     print(f"{args.sample}/{args.locus}: status={result.status} cn={copies} "
+          f"cn_status={cn_status} "
           f"callable={result.callable_fraction:.3f}")
     return 0
 
 
-def _copies_from(cn_tsv: str, sample: str, locus: str) -> tuple[int, int]:
-    """Copy number for this locus, and for its inseparable partner.
+def _copies_from(cn_tsv: str, sample: str,
+                 locus: str) -> tuple[int, int, str]:
+    """Copy number for this locus and its inseparable partner, and where the
+    locus's number came from.
 
     Genes not called from data are fixed at 2. A gene whose call is
     ``not_measured`` also falls back to 2 rather than to 0 — reporting an
     unmeasurable gene as absent would turn a measurement failure into a
-    biological claim.
+    biological claim. But the fallback 2 is not a measured 2: at LILRA3, where
+    one in four chromosomes carries the deletion, it is the wrong ploidy for a
+    large share of samples. The third value says which it is, and travels into
+    the marker so the summary can tell them apart.
     """
     import csv
 
@@ -629,14 +695,21 @@ def _copies_from(cn_tsv: str, sample: str, locus: str) -> tuple[int, int]:
             if row["sample"] == sample:
                 calls[row["gene"]] = row
 
-    def copies_of(gene: str) -> int:
+    def copies_of(gene: str) -> tuple[int, str]:
         row = calls.get(gene)
-        if not row or row.get("status") != "measured" or row.get("copies") in ("", None):
-            return 2
-        return int(row["copies"])
+        if not row:
+            return 2, "not_called"
+        status = row.get("status") or "failed"
+        if status != "measured":
+            return 2, status
+        if row.get("copies") in ("", None):
+            # Measured with no number is a broken row, not a measurement.
+            return 2, "failed"
+        return int(row["copies"]), "measured"
 
+    copies, status = copies_of(locus)
     partner = paralog_of(locus)
-    return copies_of(locus), copies_of(partner) if partner else 0
+    return copies, copies_of(partner)[0] if partner else 0, status
 
 
 if __name__ == "__main__":

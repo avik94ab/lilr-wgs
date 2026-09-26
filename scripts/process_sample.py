@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from lilrwgs import assign, cn, coverage, extract, loci  # noqa: E402
 from lilrwgs.genotype import BOWTIE2_ARGS  # noqa: E402
-from lilrwgs.shell import require  # noqa: E402
+from lilrwgs.shell import ToolError, pipeline, require, run  # noqa: E402
 
 
 def align_to_panels(sample: str, r1: Path, r2: Path, panel_index: Path,
@@ -43,14 +43,18 @@ def align_to_panels(sample: str, r1: Path, r2: Path, panel_index: Path,
     out: dict[str, str] = {}
     for gene in genes:
         bam = work / f"{gene}.bam"
-        bt2 = subprocess.Popen(
-            ["bowtie2", "-x", str(panel_index / gene), "-1", str(r1), "-2", str(r2),
-             "-p", str(threads), *BOWTIE2_ARGS, "-S", "-"],
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-        proc = subprocess.run(["samtools", "view", "-b", "-o", str(bam), "-"],
-                              stdin=bt2.stdout, capture_output=True)
-        bt2.wait()
-        if proc.returncode != 0 or not bam.exists():
+        # pipeline(), not Popen | run: a bowtie2 killed partway through hands
+        # samtools a clean EOF, and the partial BAM it writes passes quickcheck.
+        # Only bowtie2's own exit code says the gene was under-recruited.
+        try:
+            pipeline([
+                ["bowtie2", "-x", str(panel_index / gene), "-1", str(r1), "-2", str(r2),
+                 "-p", str(threads), *BOWTIE2_ARGS, "-S", "-"],
+                ["samtools", "view", "-b", "-o", str(bam), "-"],
+            ])
+        except ToolError as exc:
+            raise RuntimeError(f"{sample}/{gene}: panel alignment failed\n{exc}") from exc
+        if not bam.exists():
             raise RuntimeError(f"{sample}/{gene}: panel alignment failed")
         # A killed or truncated conversion leaves a BAM that Snakemake would
         # accept as done and that would poison arbitration. A legitimately empty
@@ -80,17 +84,20 @@ def anchor_depths(sample: str, reads_dir: Path, locus_index: Path,
         if not r1.exists() or not r2.exists():
             continue
         bam = work / f"anchor_{gene}.bam"
-        bt2 = subprocess.Popen(
-            ["bowtie2", "-x", str(locus_index / gene), "-1", str(r1), "-2", str(r2),
-             "-p", str(threads), *BOWTIE2_ARGS, "-S", "-"],
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-        subprocess.run(["samtools", "sort", "-o", str(bam), "-"],
-                       stdin=bt2.stdout, capture_output=True)
-        bt2.wait()
-        if not bam.exists() or bam.stat().st_size == 0:
-            continue
-        res = subprocess.run(["samtools", "depth", "-a", str(bam)],
-                             capture_output=True, text=True)
+        # A missing FASTQ above is a gene this run did not recruit. A tool that
+        # fails here is different: a truncated anchor alignment reads low, lowers
+        # the efficiency, and loosens every depth threshold in the sample, so it
+        # is an error rather than an anchor to skip.
+        try:
+            pipeline([
+                ["bowtie2", "-x", str(locus_index / gene), "-1", str(r1), "-2", str(r2),
+                 "-p", str(threads), *BOWTIE2_ARGS, "-S", "-"],
+                ["samtools", "sort", "-T", str(work / f"anchor_{gene}.sort"),
+                 "-o", str(bam), "-"],
+            ])
+            res = run(["samtools", "depth", "-a", str(bam)])
+        except ToolError as exc:
+            raise RuntimeError(f"{sample}/{gene}: anchor realignment failed\n{exc}") from exc
         depths = [int(ln.split("\t")[2]) for ln in res.stdout.splitlines()
                   if len(ln.split("\t")) >= 3]
         if depths:

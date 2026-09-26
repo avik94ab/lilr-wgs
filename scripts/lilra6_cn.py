@@ -180,7 +180,8 @@ def call_one(row: dict, reference: str, bwa_index: str, outdir: Path,
     try:
         stats = realign.realign_sample(
             sample, row["source"], reference, bwa_index, bam,
-            threads=threads, tmpdir=str(work), index=row["index"])
+            threads=threads, tmpdir=str(work), index=row["index"],
+            expect_alt=target_assembly == "GRCh38")
 
         # The coverage model reads the realigned BAM, so lambda_1 and the LILRA6
         # window depth are measured in the same units on the same alignment --

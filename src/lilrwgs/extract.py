@@ -391,12 +391,19 @@ def to_fastq(
 def _parse_fastq_counts(stderr: str) -> tuple[int, int]:
     """Pull pair and singleton counts out of `samtools fastq` stderr.
 
-    It reports e.g. "processed 41234 reads" and "discarded N singletons". The
-    format has shifted across samtools versions, so a miss returns zeros and the
-    caller treats a zero-pair result as an error on its own terms rather than
-    trusting this to have worked.
+    `processed` counts every read it saw, singletons included, so the pair count
+    is ``(processed - singletons) / 2`` and not ``processed / 2``. Measured on
+    HG00119: 167,082 processed and 2,362 singletons against 82,360 records in
+    each of R1 and R2 — ``processed / 2`` gives 83,541, which is the pair count
+    plus the singletons. The error is small, but it lands in the denominator of
+    the singleton rate that decides whether to warn, so it is worth being right
+    about rather than inheriting.
+
+    The wording has shifted across samtools versions, so a miss returns zeros
+    and the caller treats a zero-pair result as an error on its own terms rather
+    than trusting this to have worked.
     """
-    pairs = singletons = 0
+    processed = singletons = 0
     for line in stderr.splitlines():
         low = line.lower()
         if "singleton" in low:
@@ -407,9 +414,9 @@ def _parse_fastq_counts(stderr: str) -> tuple[int, int]:
         elif "processed" in low and "read" in low:
             for token in low.split():
                 if token.isdigit():
-                    pairs = int(token) // 2
+                    processed = int(token)
                     break
-    return pairs, singletons
+    return max(0, (processed - singletons) // 2), singletons
 
 
 def main(argv: list[str] | None = None) -> int:

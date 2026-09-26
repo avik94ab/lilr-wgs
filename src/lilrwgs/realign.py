@@ -48,7 +48,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import loci, loci_chm13
-from .extract import SUPPLEMENTARY, cram_env, read_contigs
+from .extract import SUPPLEMENTARY, _parse_fastq_counts, cram_env, read_contigs
 from .shell import ToolError, pipeline, require, run
 
 # Assemblies told apart by the length of chromosome 19, which they share the
@@ -299,37 +299,6 @@ def slice_to_fastq(
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def _parse_fastq_counts(stderr: str) -> tuple[int, int]:
-    """Pull pair and singleton counts out of `samtools fastq` stderr.
-
-    `processed` counts every read it saw, singletons included, so the pair count
-    is ``(processed - singletons) / 2`` and not ``processed / 2``. Measured on
-    HG00119: 167,082 processed and 2,362 singletons against 82,360 records in
-    each of R1 and R2 — ``processed / 2`` gives 83,541, which is the pair count
-    plus the singletons. The error is small, but it lands in the denominator of
-    the singleton rate that decides whether to warn, so it is worth being right
-    about rather than inheriting.
-
-    The wording has shifted across samtools versions, so a miss returns zeros
-    and the caller treats a zero-pair result as an error on its own terms rather
-    than trusting this to have worked.
-    """
-    processed = singletons = 0
-    for line in stderr.splitlines():
-        low = line.lower()
-        if "singleton" in low:
-            for token in low.replace("[", " ").replace("]", " ").split():
-                if token.isdigit():
-                    singletons = int(token)
-                    break
-        elif "processed" in low and "read" in low:
-            for token in low.split():
-                if token.isdigit():
-                    processed = int(token)
-                    break
-    return max(0, (processed - singletons) // 2), singletons
-
-
 def align(
     sample: str,
     r1: str | os.PathLike,
@@ -417,6 +386,7 @@ def realign_sample(
     index: str | os.PathLike | None = None,
     bwa: str = "bwa",
     samtools: str = "samtools",
+    expect_alt: bool = True,
 ) -> RealignStats:
     """One sample, from an arbitrary GRCh38 alignment to one this pipeline made.
 
@@ -428,12 +398,16 @@ def realign_sample(
             beside it; without it the realignment is not ALT-aware and every
             MAPQ-20 window in the LRC reads near zero.
         out_bam: the realigned slice, in GRCh38 coordinates.
+        expect_alt: whether the target has ALT contigs, and so needs the
+            ``.alt`` file. False for CHM13, which has none: warning there about
+            a file that should not exist puts a false alarm on every row, and
+            teaches people to ignore the one that matters on GRCh38.
     """
     from .extract import slice_cram  # local: avoids a cycle at import time
 
     stats = RealignStats(sample=sample, source=str(source))
     stats.alt_aware = index_is_alt_aware(bwa_index)
-    if not stats.alt_aware:
+    if expect_alt and not stats.alt_aware:
         stats.warnings.append(
             f"{bwa_index}.alt is missing, so the realignment is not ALT-aware "
             "and LILRA6/LILRB3 will be refused; run scripts/fetch_bwa_index.sh"

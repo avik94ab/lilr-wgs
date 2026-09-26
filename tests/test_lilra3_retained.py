@@ -225,8 +225,10 @@ class TestProcessCallsTheStretchAtItsOwnPloidy:
             elif tool == "bcftools" and cmd[1] == "concat":
                 log["concat"] += 1
                 Path(cmd[cmd.index("-o") + 1]).touch()
-            elif tool == "bcftools" and cmd[1] == "view" and "-o" in cmd:
+            elif tool == "bcftools" and cmd[1] == "view" and "-T" in cmd:
                 log["filter_beds"].append(bed_of(cmd, "-T"))
+                return _Res("##fileformat=VCFv4.2\n")
+            elif tool == "bcftools" and cmd[1] == "view" and "-o" in cmd:
                 Path(cmd[cmd.index("-o") + 1]).touch()
             elif tool == "bcftools" and cmd[1] == "view" and "-H" in cmd:
                 rec = "{c}\t{p}\t.\tA\tG\t50\tPASS\t.\tGT:AD:DP\t{gt}:10,10:20"
@@ -239,19 +241,11 @@ class TestProcessCallsTheStretchAtItsOwnPloidy:
                 Path(cmd[cmd.index("-o") + 1]).touch()
             return _Res()
 
-        class _Popen:
-            stdout = None
-
-            def __init__(self, *a, **kw):
-                pass
-
-            def wait(self):
-                return 0
-
-        def fake_subprocess_run(cmd, *a, **kw):
-            if cmd[:2] == ["samtools", "sort"]:
-                Path(cmd[cmd.index("-o") + 1]).write_bytes(b"BAM")
-            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        def fake_pipeline(stages, **kw):
+            sort = stages[-1]
+            assert sort[:2] == ["samtools", "sort"]
+            Path(sort[sort.index("-o") + 1]).write_bytes(b"BAM")
+            return _Res()
 
         def fake_evidence(bam, n, **kw):
             per_copy = genotype.copies_by_position(locus, copies, ref_seq) \
@@ -262,8 +256,7 @@ class TestProcessCallsTheStretchAtItsOwnPloidy:
 
         monkeypatch.setattr(genotype, "require", lambda *a: None)
         monkeypatch.setattr(genotype, "run", fake_run)
-        monkeypatch.setattr(genotype.subprocess, "Popen", _Popen)
-        monkeypatch.setattr(genotype.subprocess, "run", fake_subprocess_run)
+        monkeypatch.setattr(genotype, "pipeline", fake_pipeline)
         monkeypatch.setattr(genotype.callability, "gather_evidence", fake_evidence)
         monkeypatch.setattr(genotype, "_finish_haplotype",
                             lambda s, l, hap, *a, **kw: {"hap": hap})

@@ -18,7 +18,7 @@ from collections import Counter
 from pathlib import Path
 
 COLUMNS = [
-    "sample", "locus", "cn", "status", "callable_fraction",
+    "sample", "locus", "cn", "cn_status", "status", "callable_fraction",
     "n_low_depth", "n_high_depth", "n_low_mapq", "n_paralog_ambiguous",
     "n_deletion_shared", "phased_ok", "n_het", "n_phased", "phasing_rate",
     "haplotype", "gdna_len", "gdna_cds_len", "cdna_len", "protein_len",
@@ -41,7 +41,8 @@ def main() -> int:
         rate = r.get("phasing_rate")
         base = {
             "sample": r.get("sample", ""), "locus": r.get("locus", ""),
-            "cn": r.get("cn", ""), "status": r.get("status", ""),
+            "cn": r.get("cn", ""), "cn_status": r.get("cn_status", ""),
+            "status": r.get("status", ""),
             "callable_fraction": r.get("callable_fraction", ""),
             "n_low_depth": r.get("cb_n_low_depth", ""),
             "n_high_depth": r.get("cb_n_high_depth", ""),
